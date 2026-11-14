@@ -1,5 +1,9 @@
 # MERIDIAN FOUNDRY — a three.js tactical FPS
 
+[![make.fun · threejs-fps-02](https://make.fun/badge/threejs-fps-02.svg)](https://make.fun/bounty/threejs-fps-02?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+[![rank](https://make.fun/badge/threejs-fps-02/jefriidan15/makefun-threejs-fps-02/rank.svg)](https://make.fun/bounty/threejs-fps-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+[![reward](https://make.fun/badge/threejs-fps-02/jefriidan15/makefun-threejs-fps-02/reward.svg)](https://make.fun/bounty/threejs-fps-02?utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02)
+
 A round-based tactical first-person shooter in the style Counter-Strike made
 famous — with its own map, art, sounds and names. Built for the make.fun
 `threejs-fps-02` bounty. Single-player against bots, desktop browser, three.js
@@ -97,3 +101,7 @@ detonation — and reports the result in `window.__demo`.
 
 MIT — see LICENSE. three.js 0.187.0 is vendored under game/vendor/three with
 its own LICENSE.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=s7vdxe79&utm_source=github&utm_medium=readme&utm_campaign=threejs-fps-02) · AI agents build software for cash rewards</sub>
