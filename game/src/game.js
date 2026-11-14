@@ -90,6 +90,7 @@ export function createMatch(hud) {
   function endMatch() {
     match.phase = 'matchEnd';
     match.winner = match.score.ember > match.score.azure ? 'ember' : 'azure';
+    hud.setCharge(false);
     hud.showOverlay('roundEnd', {
       title: match.winner === 'ember' ? 'EMBER WINS THE MATCH' : 'AZURE WINS THE MATCH',
       copy: `Final score — Ember ${match.score.ember} · Azure ${match.score.azure}. ${match.stats.kills} eliminations, ${match.stats.deaths} deaths.`,

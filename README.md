@@ -5,6 +5,28 @@ famous — with its own map, art, sounds and names. Built for the make.fun
 `threejs-fps-02` bounty. Single-player against bots, desktop browser, three.js
 0.187.0 (vendored), static files, no build step, no network request.
 
+## What changed in v2
+
+- **Look:** brighter dusk lighting (warm furnace sun vs cool blue fill, lit
+  window strips, a low sun disc on the horizon), a textured furnace mouth
+  (glowing coals behind grate bars), painted yard signs (MERIDIAN FOUNDRY /
+  CRANE BAY), more props (pipe runs, barrels, floor lane markings), smaller
+  site plates. The v1 screenshots came out muddy and the furnace read as a
+  flat orange slab.
+- **Gunplay on screen:** slimmer view-model guns with real iron sights
+  (front post + rear ring) and a canvas starburst muzzle flash; tracers are
+  now visible additive beams instead of 1 px lines; impact sparks are bigger
+  with a glow sprite at the hit.
+- **Bots with roles:** NYX flanks wide, DAGGER holds an angle, HAVOC rushes
+  mid (ROOK holds, VEX flanks) — different reaction times, aim, speed and
+  routes per role, with a name tag above each bot's head. Bot-vs-bot fire
+  starts only on first contact (your shot, a hit on you, or 8 s in), so both
+  squads are at full strength when the fight starts.
+- **Objective UI:** while an Azure bot defuses, a red progress bar shows
+  "AZURE IS DEFUSING THE CHARGE — STOP THEM" — the plant/defuse objective
+  now reads for both teams. The "carrying the charge" tag no longer shows
+  after the match ends.
+
 ## The game
 
 **MERIDIAN FOUNDRY** is an industrial yard at dusk: a furnace hall (Site A)

@@ -155,10 +155,13 @@ export function createHud() {
       clearTimeout(bannerTimer);
       bannerTimer = setTimeout(() => banner.classList.remove('show'), ms);
     },
-    plant(progress, label) {
+    plant(progress, label, kind) {
       if (progress == null) { plantBar.hidden = true; return; }
       plantBar.hidden = false;
       plantFill.style.width = `${Math.round(progress * 100)}%`;
+      // Defuse reads red: an Azure bot is on the charge and the round is
+      // about to flip. Planting stays amber.
+      plantFill.style.background = kind === 'defuse' ? '#ff2a1a' : '';
       plantLabel.textContent = label;
     },
     flash() {
@@ -228,7 +231,7 @@ export function createHud() {
         if (!bot.alive) continue;
         mapCtx.fillStyle = bot.team === 'ember' ? '#e8702a' : '#3a86ff';
         mapCtx.beginPath();
-        mapCtx.arc(sx(bot.x), sz(bot.z), 3.5, 0, Math.PI * 2);
+        mapCtx.arc(sx(bot.x), sz(bot.z), 4.5, 0, Math.PI * 2);
         mapCtx.fill();
       }
       if (view.player.alive) {

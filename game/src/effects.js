@@ -7,30 +7,58 @@ const MAX_TRACERS = 24;
 const MAX_SPARKS = 10;
 
 export function createEffects(scene) {
+  // Tracers are thin additive cylinders stretched from muzzle to impact, not
+  // 1 px lines: v1's lines were nearly invisible at 1280x720. Pooled, reused,
+  // nothing allocated in the per-frame path beyond pooled vectors.
   const tracers = [];
+  const up = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < MAX_TRACERS; i += 1) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const mat = new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0 });
-    const line = new THREE.Line(geo, mat);
-    line.frustumCulled = false;
-    scene.add(line);
-    tracers.push({ line, life: 0 });
+    const geo = new THREE.CylinderGeometry(0.014, 0.014, 1, 6, 1, true);
+    geo.translate(0, 0.5, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    const beam = new THREE.Mesh(geo, mat);
+    beam.frustumCulled = false;
+    beam.visible = false;
+    scene.add(beam);
+    tracers.push({ beam, life: 0 });
   }
   let tracerCursor = 0;
 
   const sparks = [];
   for (let i = 0; i < MAX_SPARKS; i += 1) {
-    const count = 26;
+    const count = 40;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
-    const mat = new THREE.PointsMaterial({ color: 0xffc46a, size: 0.09, transparent: true, opacity: 0, depthWrite: false });
+    const mat = new THREE.PointsMaterial({ color: 0xffc46a, size: 0.13, transparent: true, opacity: 0, depthWrite: false });
     const points = new THREE.Points(geo, mat);
     points.frustumCulled = false;
     scene.add(points);
     sparks.push({ points, velocities: new Float32Array(count * 3), life: 0, count });
   }
   let sparkCursor = 0;
+
+  // Impact glow: one soft additive sprite per hit, pooled, fades in 0.25 s.
+  const glowCanvas = document.createElement('canvas');
+  glowCanvas.width = 64; glowCanvas.height = 64;
+  {
+    const ctx = glowCanvas.getContext('2d');
+    const grad = ctx.createRadialGradient(32, 32, 1, 32, 32, 32);
+    grad.addColorStop(0, 'rgba(255,230,160,1)');
+    grad.addColorStop(0.4, 'rgba(255,160,60,0.7)');
+    grad.addColorStop(1, 'rgba(255,120,30,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  const glowTexture = new THREE.CanvasTexture(glowCanvas);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  const glows = [];
+  for (let i = 0; i < MAX_SPARKS; i += 1) {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sprite.visible = false;
+    scene.add(sprite);
+    glows.push({ sprite, life: 0 });
+  }
+  let glowCursor = 0;
 
   const explosionMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1, 20, 14),
@@ -55,17 +83,20 @@ export function createEffects(scene) {
   let chargeBlink = 0;
 
   const tmp = new THREE.Vector3();
+  const tmpDir = new THREE.Vector3();
 
   return {
     tracer(from, to, color = 0xffe9a8) {
       const slot = tracers[tracerCursor];
       tracerCursor = (tracerCursor + 1) % MAX_TRACERS;
-      const pos = slot.line.geometry.attributes.position.array;
-      pos[0] = from.x; pos[1] = from.y; pos[2] = from.z;
-      pos[3] = to.x; pos[4] = to.y; pos[5] = to.z;
-      slot.line.geometry.attributes.position.needsUpdate = true;
-      slot.line.material.color.setHex(color);
-      slot.line.material.opacity = 0.85;
+      const length = tmpDir.copy(to).sub(from).length();
+      if (length < 0.05) return;
+      slot.beam.position.copy(from);
+      slot.beam.quaternion.setFromUnitVectors(up, tmpDir.normalize());
+      slot.beam.scale.set(1, length, 1);
+      slot.beam.material.color.setHex(color);
+      slot.beam.material.opacity = 0.75;
+      slot.beam.visible = true;
       slot.life = 0.09;
     },
     sparksAt(point, normal) {
@@ -75,14 +106,21 @@ export function createEffects(scene) {
       const n = normal ? tmp.copy(normal).normalize() : tmp.set(0, 1, 0);
       for (let i = 0; i < slot.count; i += 1) {
         pos[i * 3] = point.x; pos[i * 3 + 1] = point.y; pos[i * 3 + 2] = point.z;
-        const spread = 2.2;
-        slot.velocities[i * 3] = n.x * 2 + (Math.random() - 0.5) * spread;
-        slot.velocities[i * 3 + 1] = Math.abs(n.y) * 2 + Math.random() * 2.4;
-        slot.velocities[i * 3 + 2] = n.z * 2 + (Math.random() - 0.5) * spread;
+        const spread = 2.6;
+        slot.velocities[i * 3] = n.x * 2.4 + (Math.random() - 0.5) * spread;
+        slot.velocities[i * 3 + 1] = Math.abs(n.y) * 2.4 + Math.random() * 2.8;
+        slot.velocities[i * 3 + 2] = n.z * 2.4 + (Math.random() - 0.5) * spread;
       }
       slot.points.geometry.attributes.position.needsUpdate = true;
       slot.points.material.opacity = 1;
       slot.life = 0.45;
+      const glow = glows[glowCursor];
+      glowCursor = (glowCursor + 1) % MAX_SPARKS;
+      glow.sprite.position.copy(point);
+      glow.sprite.scale.setScalar(0.55);
+      glow.sprite.material.opacity = 0.9;
+      glow.sprite.visible = true;
+      glow.life = 0.25;
     },
     explosion(point) {
       explosionMesh.position.copy(point);
@@ -106,7 +144,8 @@ export function createEffects(scene) {
       for (const t of tracers) {
         if (t.life > 0) {
           t.life -= dt;
-          t.line.material.opacity = Math.max(0, t.life / 0.09) * 0.85;
+          t.beam.material.opacity = Math.max(0, t.life / 0.09) * 0.75;
+          if (t.life <= 0) t.beam.visible = false;
         }
       }
       for (const s of sparks) {
@@ -130,6 +169,13 @@ export function createEffects(scene) {
         explosionMesh.material.opacity = Math.max(0, explosionLife / 0.7) * 0.85;
         explosionLight.intensity = Math.max(0, explosionLife / 0.7) * 120;
         if (explosionLife <= 0) explosionMesh.visible = false;
+      }
+      for (const g of glows) {
+        if (g.life > 0) {
+          g.life -= dt;
+          g.sprite.material.opacity = Math.max(0, g.life / 0.25) * 0.9;
+          if (g.life <= 0) g.sprite.visible = false;
+        }
       }
       if (chargeMesh.visible) {
         chargeBlink += dt;

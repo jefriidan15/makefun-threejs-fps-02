@@ -7,10 +7,10 @@ import { createWorld, SPAWNS, SITES } from './world.js';
 import { createBody } from './player.js';
 import { createInput } from './input.js';
 import { createWeapon, WEAPONS } from './weapon.js';
-import { createBots } from './bots.js';
+import { createBots, CONTACT_GRACE_SECONDS } from './bots.js';
 import { createHud } from './hud.js';
 import { createEffects } from './effects.js';
-import { createMatch, siteAt, PLANT_SECONDS } from './game.js';
+import { createMatch, siteAt, PLANT_SECONDS, DEFUSE_SECONDS } from './game.js';
 import { initAudio, suspendAudio, sfx } from './audio.js';
 
 const FIXED_STEP = 1 / 60;
@@ -61,6 +61,7 @@ const body = player.state;
 const playerState = { body: player, alive: true };
 let health = 100;
 let elapsed = 0;
+let roundElapsed = 0;
 let frozen = false;
 let started = false;
 let accumulator = 0;
@@ -92,6 +93,7 @@ const botCtx = {
   playerSpeed: 0,
   planted: null,
   plantedSite: null,
+  contact: false,
   fx: effects,
   sound: (name) => sfx[name] && sfx[name](),
   damagePlayer,
@@ -121,6 +123,7 @@ function onKill(victim, killer, weaponName, headshot = false) {
 
 function damagePlayer(amount, fromName, headshot) {
   if (!playerState.alive || match.state.phase !== 'live') return;
+  botCtx.contact = true; // first contact: the squads may now engage each other
   health -= amount;
   hud.setHealth(health);
   hud.damage();
@@ -154,6 +157,8 @@ function resetPositions() {
   hud.setGrenades(match.state.grenades);
   hud.setCharge(true);
   hud.setAlive(3, 3);
+  botCtx.contact = false;
+  roundElapsed = 0;
   syncCamera();
 }
 
@@ -174,6 +179,7 @@ function aimAt(point) {
 
 function shoot(spread) {
   if (!weapon.takeRound()) { sfx.dry(); return false; }
+  botCtx.contact = true; // the player's shot is first contact
   camera.getWorldDirection(direction);
   direction.x += (Math.random() * 2 - 1) * spread;
   direction.y += (Math.random() * 2 - 1) * spread;
@@ -315,6 +321,8 @@ hud.onBuy((id) => {
 function step(dt) {
   stepCount += 1;
   elapsed += dt;
+  roundElapsed += dt;
+  if (roundElapsed > CONTACT_GRACE_SECONDS) botCtx.contact = true;
   botCtx.time = elapsed;
   const pressed = input.takePressed();
   const phase = match.state.phase;
@@ -348,6 +356,13 @@ function step(dt) {
       onDetonation: botCtx.onDetonation,
       onNextRound: botCtx.onNextRound,
     });
+    // Defuse bar: while the charge is live and an Azure bot is on it, the
+    // player sees the defuse progressing in red — the objective UI works for
+    // both teams, not just the planter.
+    const defuser = bots.bots.find((b) => b.channel);
+    if (defuser && match.state.planted) {
+      hud.plant(defuser.channel.progress / DEFUSE_SECONDS, 'AZURE IS DEFUSING THE CHARGE — STOP THEM', 'defuse');
+    }
     if (match.state.planted) {
       botCtx.planted = { x: match.state.planted.x, z: match.state.planted.z };
       botCtx.plantedSite = match.state.planted.site;
@@ -448,6 +463,11 @@ function runShot(name) {
     match.state.score.ember = 1;
     match.state.score.azure = 0;
     match.state.round = 2;
+    // Cover frame: the Longshot-7 rifle (bought with round-2 money), not the
+    // free pistol, so the view model and the fight both read.
+    match.state.money = 3400;
+    match.buy('longshot');
+    weapon.equip(WEAPONS.longshot);
     match.deploy();
     match.state.roundTime = 74;
     match.state.money = 3400;
@@ -457,6 +477,8 @@ function runShot(name) {
     settle(300);
     // Turn on the nearest living Azure bot with a clear line of sight: try
     // several lane vantage points until one sees a bot at fighting range.
+    // Prefer a spot that sees TWO Azure bots — the cover reads as a firefight,
+    // not a duel.
     const eye = new THREE.Vector3();
     function botVisibleFrom(eyePos, bot) {
       tmpVec2.set(bot.body.state.position.x, 1.2, bot.body.state.position.z);
@@ -468,20 +490,29 @@ function runShot(name) {
     }
     const spots = [[-12, 8], [12, 8], [-8, 12], [8, 12], [0, 14], [-14, 2], [14, -2], [-7, 5], [7, 5], [-3, 10], [3, 10], [-6, -6], [6, -6], [-12, -6], [12, -6], [0, -4], [-4, 9]];
     let target = null;
-    let bestPair = null; // [distance, spotX, spotZ, bot]
+    let secondBot = null;
+    let bestPair = null; // [visibleCount, distance, spotX, spotZ, bot]
     for (const [sx, sz] of spots) {
       eye.set(sx, 1.6, sz);
+      const seen = [];
       for (const bot of bots.bots) {
         if (bot.team !== 'azure' || !bot.alive) continue;
         const d = Math.hypot(bot.body.state.position.x - sx, bot.body.state.position.z - sz);
         if (d < 4 || d > 16) continue;
         if (!botVisibleFrom(eye, bot)) continue;
-        if (!bestPair || d < bestPair[0]) bestPair = [d, sx, sz, bot];
+        seen.push([d, bot]);
+      }
+      if (!seen.length) continue;
+      seen.sort((a, b) => a[0] - b[0]);
+      const score = [seen.length, -seen[0][0], sx, sz, seen[0][1]];
+      if (!bestPair || score[0] > bestPair[0] || (score[0] === bestPair[0] && score[1] > bestPair[1])) {
+        bestPair = score;
+        secondBot = seen.length > 1 ? seen[1][1] : null;
       }
     }
     if (bestPair) {
-      target = bestPair[3];
-      body.position.set(bestPair[1], 0, bestPair[2]);
+      target = bestPair[4];
+      body.position.set(bestPair[2], 0, bestPair[3]);
     }
     if (!target) {
       // Fallback: nearest Azure bot from wherever we stand, even if a crate
@@ -502,6 +533,20 @@ function runShot(name) {
       aimAt(tp);
       shoot(0);
       settle(2);
+      // Freeze a second bot's tracer in the frame: a streak from its muzzle
+      // toward the player, stopping 2.5 m short and offset a step to the
+      // player's screen-right, so the beam crosses the frame laterally
+      // instead of pointing straight down the lens.
+      if (secondBot && secondBot.alive) {
+        const from = new THREE.Vector3(secondBot.body.state.position.x, secondBot.body.state.position.y + 1.4, secondBot.body.state.position.z);
+        const to = tmpVec2.copy(body.position).add(new THREE.Vector3(0, 1.35, 0)).sub(from);
+        const dist = to.length();
+        to.multiplyScalar(Math.max(0.5, (dist - 2.5) / dist)).add(from);
+        to.x += Math.cos(body.yaw) * 1.5;
+        to.z -= Math.sin(body.yaw) * 1.5;
+        effects.tracer(from, to, 0x7aa8ff);
+        effects.sparksAt(tmpVec.set(target.body.state.position.x, 1.2, target.body.state.position.z), null);
+      }
     }
     hud.setScore(1, 0, 2);
   } else if (name === 'plant') {
@@ -512,11 +557,50 @@ function runShot(name) {
     match.state.roundTime = 48;
     body.position.set(-11.5, 0, -8.5);
     body.yaw = 0.55;
+    // Settle 2 s: the squads are mid-push and nobody has taken damage yet.
     settle(120);
     // Step inside Site A on its south-east edge, facing the furnace mouth so
-    // the site, the ring and the yard all read.
-    body.position.set(-11, 0, -8.5);
-    body.yaw = 0.69;
+    // the site, the ring and the yard all read. Try nearby framings until
+    // one also has an Azure bot retaking in frame — the plant shot should
+    // show the threat, not an empty room.
+    const eye = new THREE.Vector3();
+    function azureVisibleFrom(eyePos, yaw) {
+      // Line of sight AND inside the view cone: v1's check forgot the cone
+      // and framed bots standing behind the camera.
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+      for (const bot of bots.bots) {
+        if (bot.team !== 'azure' || !bot.alive) continue;
+        const dx = bot.body.state.position.x - eyePos.x;
+        const dz = bot.body.state.position.z - eyePos.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 2.5 || d > 15) continue;
+        if ((dx * fx + dz * fz) / d < 0.643) continue; // outside ~50° half-cone (the 16:9 horizontal half-FOV is ~53°)
+        tmpVec2.set(bot.body.state.position.x, 1.2, bot.body.state.position.z);
+        direction.copy(tmpVec2).sub(eyePos).normalize();
+        scene.updateMatrixWorld(true);
+        raycaster.set(eyePos, direction);
+        const hit = raycaster.intersectObjects(shootables, false)[0];
+        if (hit && hit.object.userData.bot === bot) return true;
+      }
+      return false;
+    }
+    // The west-edge spot first: from inside the site's west edge, facing
+    // north-east, the furnace mouth sits left of frame and the Azure bots
+    // pushing down the north lane sit right of it — both in one frame.
+    const plantSpots = [[-15, -9, -0.6], [-11, -8.5, 0.69], [-9, -7, 0.9], [-13, -6, 0.35], [-8, -10, 1.1], [-14, -9, 0.5], [-10, -6.5, 0.55]];
+    let framed = false;
+    for (const [px, pz, yaw] of plantSpots) {
+      body.position.set(px, 0, pz);
+      body.yaw = yaw;
+      syncCamera();
+      eye.set(px, 1.6, pz);
+      if (azureVisibleFrom(eye, yaw)) { framed = true; break; }
+    }
+    if (!framed) {
+      body.position.set(-11, 0, -8.5);
+      body.yaw = 0.69;
+    }
     syncCamera();
     match.state.plantProgress = 0.62;
     hud.plant(0.62, 'PLANTING THE CHARGE — FURNACE…');
@@ -568,12 +652,21 @@ function runShot(name) {
     match.state.round = 9;
     match.state.stats = { kills: 7, deaths: 2, plants: 1, defuses: 0 };
     match.endMatch();
+    // Face the lit yard (furnace glow, mid-yard) instead of the dark north
+    // wall, and let the yard show through the panel: the v1 score shot's
+    // backdrop was nearly black.
+    body.position.set(0, 0, 15.5);
+    body.yaw = 0.45;
+    body.pitch = 0.03;
+    syncCamera();
+    document.getElementById('overlay').style.background = 'rgba(20,14,10,0.55)';
     hud.setScore(5, 3, 9);
     hud.setTimer(0, 'matchEnd');
     settle(20);
   }
   hud.setScore(match.state.score.ember, match.state.score.azure, match.state.round);
   hud.setAmmo(weapon.state.mag, weapon.state.reserve);
+  hud.setWeapon(weapon.def.name);
   hud.setMoney(match.state.money);
   paintTwiceThenReady();
 }
@@ -588,12 +681,12 @@ window.__game = {
   match: match.state,
   get health() { return health; },
   get playerAlive() { return playerState.alive; },
-  get bots() { return bots.bots.map((b) => ({ name: b.name, team: b.team, alive: b.alive, x: +b.body.state.position.x.toFixed(1), z: +b.body.state.position.z.toFixed(1), hp: b.health })); },
+  get bots() { return bots.bots.map((b) => ({ name: b.name, role: b.role, team: b.team, alive: b.alive, x: +b.body.state.position.x.toFixed(1), z: +b.body.state.position.z.toFixed(1), hp: b.health })); },
   get pos() { return { x: +body.position.x.toFixed(2), z: +body.position.z.toFixed(2), yaw: +body.yaw.toFixed(2) }; },
   get phase() { return match.state.phase; },
   get frames() { return frameCount; },
   get steps() { return stepCount; },
-  version: 'meridian-foundry-1.0',
+  version: 'meridian-foundry-2.0',
 };
 
 syncCamera();

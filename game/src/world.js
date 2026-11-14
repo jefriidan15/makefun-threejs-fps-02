@@ -36,7 +36,7 @@ export const WAYPOINTS = {
     { x: 0, z: 8 }, // 3 mid south
     { x: -12, z: 4 }, // 4 west lane mid
     { x: 12, z: 4 }, // 5 east lane mid
-    { x: 0, z: 0 }, // 6 centre yard
+    { x: -3, z: 3 }, // 6 centre yard — v1 had this at (0,0), inside the centre container; bots wedged on its faces
     { x: -6, z: -4 }, // 7 mid-north west
     { x: 6, z: -4 }, // 8 mid-north east
     { x: -13, z: -11 }, // 9 site A
@@ -85,9 +85,9 @@ function speckle(ctx, size, count, colors, minR, maxR) {
 
 function makeTextures() {
   const floor = canvasTexture(512, (ctx, s) => {
-    ctx.fillStyle = '#4a4238';
+    ctx.fillStyle = '#57493c';
     ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 900, ['#3a332b', '#5a5148', '#2e2822'], 2, 22);
+    speckle(ctx, s, 900, ['#453a2e', '#6a5c4c', '#33291f', '#7d6a4e'], 2, 22);
     ctx.strokeStyle = 'rgba(20,16,12,0.55)';
     ctx.lineWidth = 3;
     for (let i = 0; i <= 4; i += 1) {
@@ -98,11 +98,18 @@ function makeTextures() {
     ctx.fillStyle = 'rgba(18,14,10,0.35)';
     ctx.beginPath(); ctx.ellipse(s * 0.3, s * 0.62, 70, 34, 0.4, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.ellipse(s * 0.72, s * 0.3, 56, 26, -0.3, 0, Math.PI * 2); ctx.fill();
+    // pale expansion-joint crosses so the yard reads as poured slabs
+    ctx.strokeStyle = 'rgba(214,188,150,0.16)';
+    ctx.lineWidth = 2;
+    for (const [cx, cy] of [[0.2, 0.2], [0.8, 0.75], [0.55, 0.45]]) {
+      ctx.beginPath(); ctx.moveTo(cx * s - 14, cy * s); ctx.lineTo(cx * s + 14, cy * s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx * s, cy * s - 14); ctx.lineTo(cx * s, cy * s + 14); ctx.stroke();
+    }
   }, 8, 7);
   const wall = canvasTexture(512, (ctx, s) => {
-    ctx.fillStyle = '#3d3630';
+    ctx.fillStyle = '#4a4036';
     ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, 500, ['#2e2822', '#4d443a', '#6b543a'], 2, 14);
+    speckle(ctx, s, 500, ['#38302a', '#5c5044', '#6b543a'], 2, 14);
     ctx.fillStyle = 'rgba(240,168,48,0.16)';
     ctx.fillRect(0, s * 0.72, s, 10);
     ctx.strokeStyle = 'rgba(15,12,10,0.6)';
@@ -141,7 +148,50 @@ function makeTextures() {
       ctx.fill();
     }
   }, 4, 1);
-  return { floor, wall, container, crate, hazard };
+  // Furnace mouth: glowing coals behind dark grate bars — never a flat slab.
+  const furnaceMouth = canvasTexture(256, (ctx, s) => {
+    const grad = ctx.createLinearGradient(0, 0, 0, s);
+    grad.addColorStop(0, '#ff8a1a');
+    grad.addColorStop(0.55, '#ff5a00');
+    grad.addColorStop(1, '#c22e00');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 90; i += 1) {
+      ctx.fillStyle = ['#ffd27a', '#ff9a3c', '#ff2a00', '#7a1a00'][(Math.random() * 4) | 0];
+      ctx.globalAlpha = 0.35 + Math.random() * 0.5;
+      ctx.beginPath();
+      ctx.arc(Math.random() * s, s * 0.45 + Math.random() * s * 0.55, 4 + Math.random() * 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#1a0e06';
+    for (let i = 0; i < 5; i += 1) ctx.fillRect(0, (i * s) / 4.4, s, 9);
+    for (let i = 0; i < 4; i += 1) ctx.fillRect((i * s) / 3.6, 0, 8, s);
+  });
+  // Yard signage: the foundry's own name, painted on the walls.
+  function signTexture(line1, line2) {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 128;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#241a12';
+    ctx.fillRect(0, 0, 512, 128);
+    ctx.strokeStyle = '#f0a830';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(6, 6, 500, 116);
+    ctx.fillStyle = '#f0a830';
+    ctx.font = 'bold 44px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(line1, 256, 56);
+    ctx.fillStyle = '#f2ede4';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(line2, 256, 98);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const signFoundry = signTexture('MERIDIAN FOUNDRY', 'FURNACE HALL — SITE A');
+  const signCrane = signTexture('CRANE BAY', 'GANTRY 02 — SITE B');
+  return { floor, wall, container, crate, hazard, furnaceMouth, signFoundry, signCrane };
 }
 
 export function createWorld(scene) {
@@ -204,11 +254,24 @@ export function createWorld(scene) {
   box(7, 4.4, 1.2, -13, 2.2, -14.6, 'furnace'); // furnace back wall
   const furnaceMouth = new THREE.Mesh(
     new THREE.BoxGeometry(3.4, 1.6, 0.3),
-    new THREE.MeshStandardMaterial({ color: 0x1a0e06, emissive: new THREE.Color('#ff6a00'), emissiveIntensity: 1.5 }),
+    new THREE.MeshStandardMaterial({ map: textures.furnaceMouth, emissive: new THREE.Color('#ff6a00'), emissiveMap: textures.furnaceMouth, emissiveIntensity: 1.1 }),
   );
   furnaceMouth.position.set(-13, 1.1, -13.9);
   group.add(furnaceMouth);
   shootables.push(furnaceMouth);
+  // Painted yard signs on the back walls, above the sites.
+  function wallSign(tex, w, x, y, z, yaw) {
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, w / 4),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, emissive: new THREE.Color('#ffffff'), emissiveMap: tex, emissiveIntensity: 0.25 }),
+    );
+    mesh.position.set(x, y, z);
+    mesh.rotation.y = yaw;
+    group.add(mesh);
+    return mesh;
+  }
+  wallSign(textures.signFoundry, 8, -13, 3.6, -17.9, 0);
+  wallSign(textures.signCrane, 6, 13, 3.6, 17.9, Math.PI);
   cylinder(0.9, 1.1, 7.5, -16.2, -14.8, 'rust'); // chimney
   cylinder(0.7, 0.9, 6, -9.8, -14.8, 'steel'); // second stack
   box(3.2, 1.1, 1.4, -17.5, 0.55, -10.5, 'crate');
@@ -268,19 +331,54 @@ export function createWorld(scene) {
   shootables.push(pipe);
   for (const [bx, bz] of [[-7.5, -15.8], [-6.6, -15.8], [-7.05, -15.8]]) cylinder(0.55, 0.55, 1.3, bx, bz, 'rust', 12);
   for (const [bx, bz] of [[7.5, 15.8], [8.4, 15.8]]) cylinder(0.55, 0.55, 1.3, bx, bz, 'steel', 12);
+  // Second pipe run along the south wall, higher, plus a mid-yard pipe stack
+  // that breaks the long east sightline.
+  const pipe2 = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 24, 12), mats.rust);
+  pipe2.rotation.z = Math.PI / 2;
+  pipe2.position.set(-2, 4.1, 17.4);
+  pipe2.castShadow = true;
+  group.add(pipe2);
+  shootables.push(pipe2);
+  box(3.4, 0.9, 0.9, 10.5, 0.45, -6, 'steel');
+  box(2.6, 0.9, 0.9, 10.5, 1.35, -6, 'rust');
+  box(1.4, 1.1, 1.4, -15.5, 0.55, 8.5, 'crate');
+  box(1.4, 1.1, 1.4, 15.5, 0.55, -8.5, 'crate');
+  box(1.2, 1.1, 1.2, 17, 0.55, 8, 'crate');
+  for (const [bx, bz] of [[-17.5, -7.5], [-16.6, -7.5]]) cylinder(0.55, 0.55, 1.3, bx, bz, 'steel', 12);
+  // Painted lane guides on the floor: worn amber chevrons down the west and
+  // east lanes, so the three lanes read at a glance. Flat decals, no collision.
+  const laneMat = new THREE.MeshBasicMaterial({ color: 0xd8a020, transparent: true, opacity: 0.5 });
+  for (const [lx, lz, ry] of [[-10, 6, 0], [10, -6, 0], [0, -6, 0]]) {
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 7), laneMat);
+    strip.rotation.x = -Math.PI / 2;
+    strip.rotation.z = ry;
+    strip.position.set(lx, 0.02, lz);
+    group.add(strip);
+  }
+  // Lit window strips high on the perimeter walls: the foundry at work.
+  const windowMat = new THREE.MeshBasicMaterial({ color: 0xffc46a });
+  for (const [wx, wz, ry] of [[-8, -17.9, 0], [4, -17.9, 0], [-4, 17.9, Math.PI], [10, 17.9, Math.PI]]) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.9), windowMat);
+    win.position.set(wx, 3.9, wz);
+    win.rotation.y = ry;
+    group.add(win);
+  }
 
   // ---- Sky, fog and dusk light ----
-  scene.background = new THREE.Color(0x2a1c22);
-  scene.fog = new THREE.Fog(new THREE.Color(0x2a1c22), 22, 62);
+  // Warm furnace glow low in the west against a cooling blue dusk overhead:
+  // the palette the whole game reads by. Brighter than v1 — the v1 frames
+  // came out muddy because the mid-ground fell to near-black.
+  scene.background = new THREE.Color(0x3a2620);
+  scene.fog = new THREE.Fog(new THREE.Color(0x3a2620), 24, 70);
   const skyGeo = new THREE.SphereGeometry(90, 24, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
     uniforms: {
-      top: { value: new THREE.Color(0x1c2440) },
-      mid: { value: new THREE.Color(0x7a3a2e) },
-      low: { value: new THREE.Color(0xf08a2e) },
+      top: { value: new THREE.Color(0x27355e) },
+      mid: { value: new THREE.Color(0xa85428) },
+      low: { value: new THREE.Color(0xff9a3c) },
     },
     vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 low;
@@ -288,10 +386,26 @@ export function createWorld(scene) {
   });
   const sky = new THREE.Mesh(skyGeo, skyMat);
   scene.add(sky);
+  // Low sun disc on the western horizon, the light the whole yard is lit by.
+  const sunCanvas = document.createElement('canvas');
+  sunCanvas.width = 128; sunCanvas.height = 128;
+  const sctx = sunCanvas.getContext('2d');
+  const sunGrad = sctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  sunGrad.addColorStop(0, 'rgba(255,214,140,1)');
+  sunGrad.addColorStop(0.35, 'rgba(255,150,60,0.85)');
+  sunGrad.addColorStop(1, 'rgba(255,120,40,0)');
+  sctx.fillStyle = sunGrad;
+  sctx.fillRect(0, 0, 128, 128);
+  const sunTex = new THREE.CanvasTexture(sunCanvas);
+  sunTex.colorSpace = THREE.SRGBColorSpace;
+  const sunDisc = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTex, transparent: true, depthWrite: false, fog: false }));
+  sunDisc.position.set(-70, 10, -30);
+  sunDisc.scale.set(34, 34, 1);
+  scene.add(sunDisc);
 
-  const hemi = new THREE.HemisphereLight(new THREE.Color(0x4a5578), new THREE.Color(0x2a1c14), 1.15);
+  const hemi = new THREE.HemisphereLight(new THREE.Color(0x5a6a94), new THREE.Color(0x3a2a1c), 1.5);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(new THREE.Color(0xff9a3c), 2.6);
+  const sun = new THREE.DirectionalLight(new THREE.Color(0xff9a3c), 3.2);
   sun.position.set(-26, 12, 6);
   sun.target.position.set(4, 0, -2);
   sun.castShadow = true;
@@ -303,17 +417,17 @@ export function createWorld(scene) {
   sun.shadow.camera.far = 80;
   sun.shadow.bias = -0.0006;
   scene.add(sun, sun.target);
-  const fill = new THREE.DirectionalLight(new THREE.Color(0x6a7ab0), 0.75);
+  const fill = new THREE.DirectionalLight(new THREE.Color(0x6a7ab0), 1.0);
   fill.position.set(14, 10, -12);
   scene.add(fill);
   // Furnace glow and crane-bay lamp
-  const furnaceLight = new THREE.PointLight(new THREE.Color(0xff6a00), 26, 16, 1.8);
+  const furnaceLight = new THREE.PointLight(new THREE.Color(0xff6a00), 30, 16, 1.8);
   furnaceLight.position.set(-13, 1.6, -12.6);
   scene.add(furnaceLight);
-  const lampB = new THREE.PointLight(new THREE.Color(0xffc46a), 14, 14, 1.8);
+  const lampB = new THREE.PointLight(new THREE.Color(0xffc46a), 18, 14, 1.8);
   lampB.position.set(13, 5.4, 11);
   scene.add(lampB);
-  const lampMid = new THREE.PointLight(new THREE.Color(0x9ab0ff), 8, 12, 1.8);
+  const lampMid = new THREE.PointLight(new THREE.Color(0x9ab0ff), 12, 12, 1.8);
   lampMid.position.set(0, 4.5, 0);
   scene.add(lampMid);
 
@@ -338,8 +452,8 @@ export function createWorld(scene) {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-    sprite.position.set(x, 5.4, z);
-    sprite.scale.set(3.4, 1.7, 1);
+    sprite.position.set(x, 4.6, z);
+    sprite.scale.set(2.6, 1.3, 1);
     scene.add(sprite);
     return sprite;
   }
@@ -354,9 +468,9 @@ export function createWorld(scene) {
     step(dt) {
       time += dt;
       // Furnace mouth breathes; site plates bob gently.
-      furnaceLight.intensity = 24 + Math.sin(time * 2.1) * 4 + Math.sin(time * 5.7) * 2;
-      plateA.position.y = 5.4 + Math.sin(time * 0.9) * 0.12;
-      plateB.position.y = 5.4 + Math.sin(time * 0.9 + 2) * 0.12;
+      furnaceLight.intensity = 30 + Math.sin(time * 2.1) * 4 + Math.sin(time * 5.7) * 2;
+      plateA.position.y = 4.6 + Math.sin(time * 0.9) * 0.12;
+      plateB.position.y = 4.6 + Math.sin(time * 0.9 + 2) * 0.12;
     },
   };
 }
