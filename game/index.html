@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian Foundry — a three.js tactical FPS</title>
+<style>
+  :root {
+    --canvas: #191411;
+    --surface: #241c16;
+    --hairline: #3a2f26;
+    --ink: #f2ede4;
+    --muted: #a89a8a;
+    --accent: #f0a830;
+    --ember: #e8702a;
+    --azure: #3a86ff;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--canvas); color: var(--ink); font-family: var(--font-ui); }
+  #game, #game canvas { position: fixed; inset: 0; display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); --spread: 3px; }
+  #crosshair i { position: absolute; background: var(--ink); opacity: .9; box-shadow: 0 0 2px #000; }
+  #crosshair i:nth-child(1) { left: 10px; top: calc(-1 * var(--spread)); width: 2px; height: 7px; }
+  #crosshair i:nth-child(2) { left: 10px; bottom: calc(-1 * var(--spread)); width: 2px; height: 7px; }
+  #crosshair i:nth-child(3) { top: 10px; left: calc(-1 * var(--spread)); height: 2px; width: 7px; }
+  #crosshair i:nth-child(4) { top: 10px; right: calc(-1 * var(--spread)); height: 2px; width: 7px; }
+
+  #hitmarker { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%) rotate(45deg); opacity: 0; transition: opacity 90ms linear; }
+  #hitmarker.on { opacity: 1; }
+  #hitmarker.kill i { background: #ff3a2a; }
+  #hitmarker i { position: absolute; background: var(--accent); }
+  #hitmarker i:nth-child(1) { left: 12px; top: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(2) { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
+  #hitmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
+
+  #topbar { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; font-family: var(--font-readout); }
+  #topbar .team { font-size: 15px; font-weight: 700; letter-spacing: .08em; }
+  #topbar .team.ember { color: var(--ember); }
+  #topbar .team.azure { color: var(--azure); }
+  #score-ember, #score-azure { font-size: 30px; font-weight: 700; line-height: 1; }
+  #timer-wrap { text-align: center; min-width: 86px; }
+  #timer-val { font-size: 26px; font-weight: 700; line-height: 1; }
+  #timer-val.buy { color: var(--accent); }
+  #round-val { font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-top: 2px; }
+  #alive-ember, #alive-azure { font-size: 11px; letter-spacing: 2px; }
+
+  #money-box { position: fixed; top: 18px; left: 24px; font-family: var(--font-readout); }
+  #money-val { font-size: 26px; font-weight: 700; color: var(--accent); }
+  #money-label { font-size: 10px; letter-spacing: .18em; color: var(--muted); }
+  #charge-tag { margin-top: 6px; display: inline-block; padding: 3px 8px; background: #ff2a1a; color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .12em; border-radius: 3px; }
+  #charge-tag[hidden] { display: none; }
+
+  #minimap-wrap { position: fixed; top: 18px; right: 24px; text-align: right; }
+  #minimap { width: 172px; height: 155px; border: 1px solid var(--hairline); background: rgba(20,16,12,.85); }
+  #minimap-label { font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-top: 4px; font-family: var(--font-readout); }
+  #killfeed { margin-top: 8px; display: grid; gap: 4px; justify-items: end; font-family: var(--font-readout); font-size: 12px; }
+  .kf-row { background: rgba(20,16,12,.8); padding: 3px 8px; border-radius: 3px; }
+  .kf-killer { color: var(--ember); font-weight: 700; }
+  .kf-victim { color: var(--azure); font-weight: 700; }
+  .kf-weapon { color: var(--muted); margin: 0 6px; }
+
+  #health-box { position: fixed; left: 24px; bottom: 24px; width: 240px; }
+  #health-num { font-family: var(--font-readout); font-size: 34px; font-weight: 700; line-height: 1; }
+  #health-bar { height: 8px; background: #33291f; margin-top: 6px; border-radius: 2px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: var(--ink); transition: width 120ms linear; }
+  #health-fill.low { background: #ff3a2a; }
+  #health-label { font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-top: 4px; font-family: var(--font-readout); }
+
+  #ammo { position: fixed; right: 24px; bottom: 24px; text-align: right; font-family: var(--font-readout); }
+  #weapon-name { font-size: 13px; letter-spacing: .14em; color: var(--muted); }
+  #ammo-mag { font-size: 56px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  #ammo.empty #ammo-mag { color: var(--accent); }
+  #ammo-reserve { font-size: 16px; color: var(--muted); }
+  #nade-val { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  #banner { position: fixed; left: 50%; top: 26%; transform: translate(-50%, -50%) scale(.96); text-align: center; opacity: 0; transition: opacity 200ms ease, transform 200ms ease; }
+  #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #banner-title { font-size: 40px; font-weight: 800; letter-spacing: .04em; text-shadow: 0 2px 18px rgba(0,0,0,.8); }
+  #banner-sub { font-size: 15px; color: var(--muted); margin-top: 6px; text-shadow: 0 1px 8px rgba(0,0,0,.8); }
+
+  #plant-bar { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); width: 320px; text-align: center; }
+  #plant-bar[hidden] { display: none; }
+  #plant-label { font-family: var(--font-readout); font-size: 13px; letter-spacing: .14em; margin-bottom: 6px; }
+  #plant-track { height: 8px; background: #33291f; border-radius: 2px; overflow: hidden; }
+  #plant-fill { height: 100%; width: 0; background: var(--accent); }
+
+  #flash-overlay { position: fixed; inset: 0; background: #fff; opacity: 0; transition: opacity 380ms linear; pointer-events: none; }
+  #flash-overlay.on { opacity: .85; }
+  #damage-overlay { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 200ms linear; box-shadow: inset 0 0 90px 30px rgba(255,40,20,.55); }
+  #damage-overlay.on { opacity: 1; }
+
+  .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(20,14,10,.86); pointer-events: auto; }
+  .overlay[hidden] { display: none; }
+  .panel { width: min(460px, 100%); padding: 32px; background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px; }
+  .panel h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+  .panel h1 .ember { color: var(--ember); }
+  .panel p { margin: 0 0 24px; font-size: 15px; line-height: 1.55; color: var(--muted); }
+  #play, #deploy { font: inherit; font-weight: 700; padding: 12px 18px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--canvas); cursor: pointer; }
+  #play:hover, #deploy:hover { background: var(--ink); border-color: var(--ink); }
+  .keys { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; font-size: 13px; color: var(--muted); }
+  .keys li { display: flex; align-items: center; gap: 7px; }
+  .keys kbd { min-width: 24px; padding: 2px 6px; border: 1px solid var(--hairline); border-radius: 4px; font-family: var(--font-readout); font-size: 12px; color: var(--ink); text-align: center; }
+
+  #buy-panel { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(20,14,10,.72); pointer-events: auto; }
+  #buy-panel[hidden] { display: none; }
+  .buy-inner { width: min(860px, 100%); background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px; padding: 24px 28px; }
+  .buy-inner h2 { margin: 0; font-size: 22px; letter-spacing: .02em; }
+  .buy-inner .buy-sub { color: var(--muted); font-size: 13px; margin: 6px 0 18px; }
+  .buy-inner .buy-sub b { color: var(--accent); font-family: var(--font-readout); }
+  #buy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .buy-card { font: inherit; text-align: left; background: #1d1712; color: var(--ink); border: 1px solid var(--hairline); border-radius: 6px; padding: 14px; cursor: pointer; display: grid; gap: 5px; }
+  .buy-card:hover { border-color: var(--accent); }
+  .buy-card.owned { border-color: var(--accent); background: #2a2113; }
+  .buy-card.cant { opacity: .45; }
+  .buy-card b { font-size: 15px; letter-spacing: .04em; }
+  .buy-kind { font-family: var(--font-readout); font-size: 11px; color: var(--muted); }
+  .buy-blurb { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .buy-price { font-family: var(--font-readout); font-size: 16px; font-weight: 700; color: var(--accent); }
+  .buy-foot { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
+  .buy-foot .hint { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud" aria-hidden="true">
+  <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+
+  <div id="topbar">
+    <div style="text-align:right"><div class="team ember">EMBER</div><div id="alive-ember">●●●</div></div>
+    <span id="score-ember">0</span>
+    <div id="timer-wrap"><div id="timer-val">1:40</div><div id="round-val">ROUND 1</div></div>
+    <span id="score-azure">0</span>
+    <div><div class="team azure">AZURE</div><div id="alive-azure">●●●</div></div>
+  </div>
+
+  <div id="money-box">
+    <div id="money-val">$800</div>
+    <div id="money-label">CREDITS</div>
+    <div id="charge-tag" hidden>◉ CARRYING THE CHARGE — hold E at a site</div>
+  </div>
+
+  <div id="minimap-wrap">
+    <canvas id="minimap" width="172" height="155"></canvas>
+    <div id="minimap-label">MERIDIAN FOUNDRY</div>
+    <div id="killfeed"></div>
+  </div>
+
+  <div id="health-box">
+    <span id="health-num">100</span>
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div id="health-label">INTEGRITY</div>
+  </div>
+
+  <div id="ammo">
+    <div id="weapon-name">P9 SIDEWINDER</div>
+    <span id="ammo-mag">12</span><span id="ammo-reserve">/ 48</span>
+    <div id="nade-val">G · no grenade</div>
+  </div>
+
+  <div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
+
+  <div id="plant-bar" hidden>
+    <div id="plant-label">PLANTING…</div>
+    <div id="plant-track"><div id="plant-fill"></div></div>
+  </div>
+</div>
+
+<div id="flash-overlay"></div>
+<div id="damage-overlay"></div>
+
+<div id="overlay" class="overlay">
+  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
+    <h1 id="overlay-title">MERIDIAN FOUNDRY</h1>
+    <p id="overlay-copy">Three versus three. Plant the charge at Furnace or Crane Bay, or clear the Azure squad. Click to play.</p>
+    <button id="play" type="button">Click to play</button>
+    <ul class="keys">
+      <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move &nbsp; <kbd>Shift</kbd> Sprint &nbsp; <kbd>Ctrl</kbd> Crouch &nbsp; <kbd>Space</kbd> Jump</li>
+      <li><kbd>Mouse</kbd> Look &nbsp; <kbd>Click</kbd> Fire &nbsp; <kbd>R</kbd> Reload &nbsp; <kbd>G</kbd> Flash grenade</li>
+      <li><kbd>E</kbd> Plant / defuse at a site &nbsp; <kbd>B</kbd> Buy menu</li>
+    </ul>
+  </section>
+</div>
+
+<div id="buy-panel" hidden>
+  <div class="buy-inner">
+    <h2 id="buy-title">BUY PHASE — ROUND 1</h2>
+    <p class="buy-sub">Spend your credits. You carry <b id="buy-money">$800</b>. First to five rounds takes the match — win $3,250, lose $1,900, every elimination $300.</p>
+    <div id="buy-grid"></div>
+    <div class="buy-foot">
+      <button id="deploy" type="button">DEPLOY ▸</button>
+      <span class="hint">Deploy when ready — the round starts on its own when the timer runs out. B reopens this menu.</span>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
