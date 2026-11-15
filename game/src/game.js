@@ -2,7 +2,7 @@
 // holds all match state so main.js and the bots read the same truth. First to
 // five rounds takes the match; a round is won by eliminating the other squad,
 // by the charge detonating, by a defuse, or by the clock when nothing is planted.
-import { WEAPONS, GRENADE } from './weapon.js';
+import { WEAPONS, GRENADE, SMOKE } from './weapon.js';
 import { SITES } from './world.js';
 import { sfx } from './audio.js';
 
@@ -31,6 +31,7 @@ export function createMatch(hud) {
     score: { ember: 0, azure: 0 },
     money: 800,
     grenades: 0,
+    smokes: 0,
     ownedWeapon: 'sidewinder',
     buyTime: BUY_SECONDS,
     roundTime: ROUND_SECONDS,
@@ -39,12 +40,17 @@ export function createMatch(hud) {
     plantProgress: 0,
     winner: null,
     stats: { kills: 0, deaths: 0, plants: 0, defuses: 0 },
+    // Per-round record, oldest first: { winner, reason }. The HUD renders it
+    // as win/loss pips under the score, so the match's shape is visible.
+    history: [],
   };
 
   function pushHud() {
     hud.setMoney(match.money);
     hud.setScore(match.score.ember, match.score.azure, match.round);
     hud.setGrenades(match.grenades);
+    hud.setSmokes(match.smokes);
+    hud.setHistory(match.history);
     hud.setCharge(true);
   }
 
@@ -76,6 +82,7 @@ export function createMatch(hud) {
     match.endTime = 4.5;
     match.plantProgress = 0;
     match.score[winner] += 1;
+    match.history.push({ winner, reason });
     const playerWon = winner === 'ember';
     match.money += playerWon ? WIN_BONUS : LOSS_BONUS;
     if (playerWon) sfx.roundWin(); else sfx.roundLose();
@@ -91,9 +98,15 @@ export function createMatch(hud) {
     match.phase = 'matchEnd';
     match.winner = match.score.ember > match.score.azure ? 'ember' : 'azure';
     hud.setCharge(false);
+    // The score screen reads like a match report, not a bare number: the
+    // round-by-round shape, the player's own line, and who carried it.
+    const roundsLine = match.history.length
+      ? match.history.map((h, i) => `R${i + 1} ${h.winner === 'ember' ? 'W' : 'L'}`).join(' · ') + '. '
+      : '';
+    const best = match.stats.kills >= 5 ? 'Top fragger on the yard.' : 'A hard-fought yard.';
     hud.showOverlay('roundEnd', {
       title: match.winner === 'ember' ? 'EMBER WINS THE MATCH' : 'AZURE WINS THE MATCH',
-      copy: `Final score — Ember ${match.score.ember} · Azure ${match.score.azure}. ${match.stats.kills} eliminations, ${match.stats.deaths} deaths.`,
+      copy: `Final score — Ember ${match.score.ember} · Azure ${match.score.azure}. ${roundsLine}You: ${match.stats.kills} eliminations, ${match.stats.deaths} deaths, ${match.stats.plants} plant${match.stats.plants === 1 ? '' : 's'}. ${best}`,
       action: 'Play again',
     });
   }
@@ -105,8 +118,10 @@ export function createMatch(hud) {
       match.score = { ember: 0, azure: 0 };
       match.money = 800;
       match.grenades = 0;
+      match.smokes = 0;
       match.ownedWeapon = 'sidewinder';
       match.stats = { kills: 0, deaths: 0, plants: 0, defuses: 0 };
+      match.history = [];
       match.winner = null;
       startRound();
     },
@@ -120,6 +135,14 @@ export function createMatch(hud) {
         if (match.grenades >= 2 || match.money < GRENADE.price) { sfx.denied(); return false; }
         match.money -= GRENADE.price;
         match.grenades += 1;
+        sfx.buy();
+        pushHud();
+        return true;
+      }
+      if (itemId === 'smoke') {
+        if (match.smokes >= 2 || match.money < SMOKE.price) { sfx.denied(); return false; }
+        match.money -= SMOKE.price;
+        match.smokes += 1;
         sfx.buy();
         pushHud();
         return true;

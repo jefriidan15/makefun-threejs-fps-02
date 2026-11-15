@@ -1,7 +1,7 @@
 // The DOM HUD: crosshair, hit marker, health, ammo, money, round timer, score,
 // team strength, kill feed, minimap, buy menu and the overlay panels. It never
 // touches the simulation; main.js pushes numbers in and reads clicks out.
-import { WEAPONS, GRENADE } from './weapon.js';
+import { WEAPONS, GRENADE, SMOKE } from './weapon.js';
 
 const COPY = {
   start: { title: 'MERIDIAN FOUNDRY', copy: 'Three versus three. Plant the charge at Furnace or Crane Bay, or clear the Azure squad. Click to play.', action: 'Click to play' },
@@ -29,6 +29,10 @@ export function createHud() {
   const aliveEmber = $('alive-ember');
   const aliveAzure = $('alive-azure');
   const nadeVal = $('nade-val');
+  const smokeVal = $('smoke-val');
+  const historyEl = $('round-history');
+  const dmgDir = $('dmg-dir');
+  const dmgNum = $('dmg-num');
   const chargeTag = $('charge-tag');
   const killfeed = $('killfeed');
   const banner = $('banner');
@@ -50,9 +54,20 @@ export function createHud() {
 
   let hitTimer = 0;
   let bannerTimer = 0;
-  let last = { mag: -1, reserve: -1, hp: -1, money: -1, timer: -1, se: -1, sa: -1, round: -1, ae: -1, aa: -1, nade: -1, weapon: '' };
+  let dmgDirTimer = 0;
+  let dmgNumTimer = 0;
+  let last = { mag: -1, reserve: -1, hp: -1, money: -1, timer: -1, se: -1, sa: -1, round: -1, ae: -1, aa: -1, nade: -1, smoke: -1, weapon: '', history: '' };
   let playHandler = null;
   let buyHandler = null;
+
+  // Three thin stat bars under each weapon: power / range / fire rate. The
+  // buy menu is a choice, not a price list — the bars say what the money buys.
+  function statBars(def) {
+    return ['power', 'range', 'rate'].map((key) => {
+      const label = key === 'power' ? 'PWR' : key === 'range' ? 'RNG' : 'RTE';
+      return `<span class="buy-bar"><i>${label}</i><b><em style="width:${def.bars[key]}%"></em></b></span>`;
+    }).join('');
+  }
 
   function buildBuyMenu() {
     buyGrid.innerHTML = '';
@@ -61,7 +76,7 @@ export function createHud() {
       card.type = 'button';
       card.className = 'buy-card';
       card.dataset.id = def.id;
-      card.innerHTML = `<b>${def.name}</b><span class="buy-kind">${def.kind} · ${def.damage} dmg · ${def.mag} rnd</span><span class="buy-blurb">${def.blurb}</span><span class="buy-price">$${def.price}</span>`;
+      card.innerHTML = `<b>${def.name}</b><span class="buy-kind">${def.kind} · ${def.damage} dmg · ${def.mag} rnd</span><span class="buy-blurb">${def.blurb}</span><span class="buy-bars">${statBars(def)}</span><span class="buy-price">$${def.price}</span>`;
       card.addEventListener('click', () => buyHandler && buyHandler(def.id));
       buyGrid.appendChild(card);
     }
@@ -72,6 +87,13 @@ export function createHud() {
     nade.innerHTML = `<b>${GRENADE.name}</b><span class="buy-kind">Grenade · press G to throw</span><span class="buy-blurb">${GRENADE.blurb}</span><span class="buy-price">$${GRENADE.price}</span>`;
     nade.addEventListener('click', () => buyHandler && buyHandler('grenade'));
     buyGrid.appendChild(nade);
+    const smoke = document.createElement('button');
+    smoke.type = 'button';
+    smoke.className = 'buy-card';
+    smoke.dataset.id = 'smoke';
+    smoke.innerHTML = `<b>${SMOKE.name}</b><span class="buy-kind">Grenade · press Q to throw</span><span class="buy-blurb">${SMOKE.blurb}</span><span class="buy-price">$${SMOKE.price}</span>`;
+    smoke.addEventListener('click', () => buyHandler && buyHandler('smoke'));
+    buyGrid.appendChild(smoke);
   }
   buildBuyMenu();
   deployBtn.addEventListener('click', () => buyHandler && buyHandler('deploy'));
@@ -126,7 +148,37 @@ export function createHud() {
     setGrenades(n) {
       if (n === last.nade) return;
       last.nade = n;
-      nadeVal.textContent = n > 0 ? `G · SPARK-9 ×${n}` : 'G · no grenade';
+      nadeVal.textContent = n > 0 ? `G · SPARK-9 ×${n}` : 'G · no flash';
+    },
+    setSmokes(n) {
+      if (n === last.smoke) return;
+      last.smoke = n;
+      smokeVal.textContent = n > 0 ? `Q · SMOKE-4 ×${n}` : 'Q · no smoke';
+    },
+    // Round-history pips: one dot per finished round, orange for a win,
+    // blue for a loss, under the score — the match's shape at a glance.
+    setHistory(history) {
+      const key = history.map((h) => h.winner[0]).join('');
+      if (key === last.history) return;
+      last.history = key;
+      historyEl.innerHTML = history.map((h) => `<i class="${h.winner === 'ember' ? 'w' : 'l'}"></i>`).join('');
+    },
+    // Damage direction: a red arc at the screen edge pointing at whoever
+    // shot you, rotated so 0° is straight ahead of where you face.
+    damageFrom(angleDeg) {
+      dmgDir.style.setProperty('--rot', `${angleDeg}deg`);
+      dmgDir.classList.add('on');
+      clearTimeout(dmgDirTimer);
+      dmgDirTimer = setTimeout(() => dmgDir.classList.remove('on'), 900);
+    },
+    // Floating damage number beside the crosshair: the hit's size, so a
+    // headshot reads differently from a body shot.
+    damageNumber(amount, headshot) {
+      dmgNum.textContent = headshot ? `${amount} ⌖` : String(amount);
+      dmgNum.classList.toggle('head', headshot);
+      dmgNum.classList.add('on');
+      clearTimeout(dmgNumTimer);
+      dmgNumTimer = setTimeout(() => dmgNum.classList.remove('on'), 650);
     },
     setCharge(carrying) {
       chargeTag.hidden = !carrying;
@@ -175,7 +227,7 @@ export function createHud() {
     markBuyAffordable(money, owned) {
       for (const card of buyGrid.children) {
         const id = card.dataset.id;
-        const price = id === 'grenade' ? GRENADE.price : WEAPONS[id].price;
+        const price = id === 'grenade' ? GRENADE.price : id === 'smoke' ? SMOKE.price : WEAPONS[id].price;
         card.classList.toggle('owned', owned === id);
         card.classList.toggle('cant', price > money && owned !== id);
       }

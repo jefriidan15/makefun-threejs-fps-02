@@ -38,6 +38,17 @@
   #hitmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
   #hitmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
 
+  /* Damage direction: a red arc at the screen edge, rotated to the shot's
+     bearing relative to where the player faces. */
+  #dmg-dir { position: fixed; left: 50%; top: 50%; width: 150px; height: 150px; margin: -75px 0 0 -75px; transform: rotate(var(--rot, 0deg)); opacity: 0; transition: opacity 300ms linear; pointer-events: none; }
+  #dmg-dir.on { opacity: 1; }
+  #dmg-dir i { position: absolute; left: 50%; top: -4px; width: 54px; height: 12px; margin-left: -27px; background: #ff2a1a; border-radius: 6px; box-shadow: 0 0 14px rgba(255,42,26,.9); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+
+  /* Floating damage number beside the crosshair. */
+  #dmg-num { position: fixed; left: calc(50% + 26px); top: calc(50% - 34px); font-family: var(--font-readout); font-size: 17px; font-weight: 700; color: var(--ink); text-shadow: 0 1px 6px #000; opacity: 0; transition: opacity 220ms linear; pointer-events: none; }
+  #dmg-num.on { opacity: 1; }
+  #dmg-num.head { color: var(--accent); font-size: 20px; }
+
   #topbar { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; font-family: var(--font-readout); }
   #topbar .team { font-size: 15px; font-weight: 700; letter-spacing: .08em; }
   #topbar .team.ember { color: var(--ember); }
@@ -47,6 +58,10 @@
   #timer-val { font-size: 26px; font-weight: 700; line-height: 1; }
   #timer-val.buy { color: var(--accent); }
   #round-val { font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-top: 2px; }
+  #round-history { display: flex; gap: 4px; justify-content: center; margin-top: 4px; }
+  #round-history i { width: 8px; height: 8px; border-radius: 50%; display: block; }
+  #round-history i.w { background: var(--ember); }
+  #round-history i.l { background: var(--azure); }
   #alive-ember, #alive-azure { font-size: 11px; letter-spacing: 2px; }
 
   #money-box { position: fixed; top: 18px; left: 24px; font-family: var(--font-readout); }
@@ -58,8 +73,8 @@
   #minimap-wrap { position: fixed; top: 18px; right: 24px; text-align: right; }
   #minimap { width: 172px; height: 155px; border: 1px solid var(--hairline); background: rgba(20,16,12,.85); }
   #minimap-label { font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-top: 4px; font-family: var(--font-readout); }
-  #killfeed { margin-top: 8px; display: grid; gap: 4px; justify-items: end; font-family: var(--font-readout); font-size: 12px; }
-  .kf-row { background: rgba(20,16,12,.8); padding: 3px 8px; border-radius: 3px; }
+  #killfeed { margin-top: 8px; display: grid; gap: 4px; justify-items: end; font-family: var(--font-readout); font-size: 13px; }
+  .kf-row { background: rgba(20,16,12,.85); padding: 4px 9px; border-radius: 3px; border-left: 3px solid var(--ember); }
   .kf-killer { color: var(--ember); font-weight: 700; }
   .kf-victim { color: var(--azure); font-weight: 700; }
   .kf-weapon { color: var(--muted); margin: 0 6px; }
@@ -77,6 +92,7 @@
   #ammo.empty #ammo-mag { color: var(--accent); }
   #ammo-reserve { font-size: 16px; color: var(--muted); }
   #nade-val { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #smoke-val { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
   #banner { position: fixed; left: 50%; top: 26%; transform: translate(-50%, -50%) scale(.96); text-align: center; opacity: 0; transition: opacity 200ms ease, transform 200ms ease; }
   #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -120,6 +136,11 @@
   .buy-card b { font-size: 15px; letter-spacing: .04em; }
   .buy-kind { font-family: var(--font-readout); font-size: 11px; color: var(--muted); }
   .buy-blurb { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .buy-bars { display: grid; gap: 3px; margin: 2px 0; }
+  .buy-bar { display: flex; align-items: center; gap: 6px; font-family: var(--font-readout); font-size: 9px; color: var(--muted); }
+  .buy-bar i { font-style: normal; width: 22px; }
+  .buy-bar b { flex: 1; height: 4px; background: #33291f; border-radius: 2px; overflow: hidden; }
+  .buy-bar em { display: block; height: 100%; background: var(--accent); }
   .buy-price { font-family: var(--font-readout); font-size: 16px; font-weight: 700; color: var(--accent); }
   .buy-foot { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
   .buy-foot .hint { font-size: 12px; color: var(--muted); }
@@ -131,11 +152,13 @@
 <div id="hud" aria-hidden="true">
   <div id="crosshair"><i></i><i></i><i></i><i></i></div>
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+  <div id="dmg-dir"><i></i></div>
+  <div id="dmg-num"></div>
 
   <div id="topbar">
     <div style="text-align:right"><div class="team ember">EMBER</div><div id="alive-ember">●●●</div></div>
     <span id="score-ember">0</span>
-    <div id="timer-wrap"><div id="timer-val">1:40</div><div id="round-val">ROUND 1</div></div>
+    <div id="timer-wrap"><div id="timer-val">1:40</div><div id="round-val">ROUND 1</div><div id="round-history"></div></div>
     <span id="score-azure">0</span>
     <div><div class="team azure">AZURE</div><div id="alive-azure">●●●</div></div>
   </div>
@@ -161,7 +184,8 @@
   <div id="ammo">
     <div id="weapon-name">P9 SIDEWINDER</div>
     <span id="ammo-mag">12</span><span id="ammo-reserve">/ 48</span>
-    <div id="nade-val">G · no grenade</div>
+    <div id="nade-val">G · no flash</div>
+    <div id="smoke-val">Q · no smoke</div>
   </div>
 
   <div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
@@ -182,7 +206,7 @@
     <button id="play" type="button">Click to play</button>
     <ul class="keys">
       <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move &nbsp; <kbd>Shift</kbd> Sprint &nbsp; <kbd>Ctrl</kbd> Crouch &nbsp; <kbd>Space</kbd> Jump</li>
-      <li><kbd>Mouse</kbd> Look &nbsp; <kbd>Click</kbd> Fire &nbsp; <kbd>R</kbd> Reload &nbsp; <kbd>G</kbd> Flash grenade</li>
+      <li><kbd>Mouse</kbd> Look &nbsp; <kbd>Click</kbd> Fire &nbsp; <kbd>R</kbd> Reload &nbsp; <kbd>G</kbd> Flash &nbsp; <kbd>Q</kbd> Smoke</li>
       <li><kbd>E</kbd> Plant / defuse at a site &nbsp; <kbd>B</kbd> Buy menu</li>
     </ul>
   </section>

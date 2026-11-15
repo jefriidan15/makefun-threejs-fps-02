@@ -191,7 +191,26 @@ function makeTextures() {
   }
   const signFoundry = signTexture('MERIDIAN FOUNDRY', 'FURNACE HALL — SITE A');
   const signCrane = signTexture('CRANE BAY', 'GANTRY 02 — SITE B');
-  return { floor, wall, container, crate, hazard, furnaceMouth, signFoundry, signCrane };
+  const signDanger = signTexture('DANGER', 'MOLTEN METAL — KEEP CLEAR');
+  // Big painted site letters for the floor: the A and B read from across the
+  // yard, so a player always knows which site they are standing in.
+  function floorLetter(letter) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 256;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, 256, 256);
+    ctx.fillStyle = 'rgba(240,168,48,0.9)';
+    ctx.font = 'bold 190px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(letter, 128, 136);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const letterA = floorLetter('A');
+  const letterB = floorLetter('B');
+  return { floor, wall, container, crate, hazard, furnaceMouth, signFoundry, signCrane, signDanger, letterA, letterB };
 }
 
 export function createWorld(scene) {
@@ -272,6 +291,50 @@ export function createWorld(scene) {
   }
   wallSign(textures.signFoundry, 8, -13, 3.6, -17.9, 0);
   wallSign(textures.signCrane, 6, 13, 3.6, 17.9, Math.PI);
+  wallSign(textures.signDanger, 4.5, -5.5, 3.1, -17.9, 0);
+  // Painted site letters on the floor inside each ring.
+  for (const [tex, site] of [[textures.letterA, SITES.A], [textures.letterB, SITES.B]]) {
+    const letter = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 3.4),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    letter.rotation.x = -Math.PI / 2;
+    letter.position.set(site.center.x, 0.025, site.center.z);
+    group.add(letter);
+  }
+  // Worn tyre tracks and scattered debris: the floor is a working yard, not
+  // a clean slab. Flat decals and small non-colliding rubble, so routes and
+  // sightlines do not change.
+  const trackMat = new THREE.MeshBasicMaterial({ color: 0x14100c, transparent: true, opacity: 0.35, depthWrite: false });
+  for (const [tx, tz, ry, len] of [[-6, 8, 0.3, 7], [6, -8, -0.3, 7], [0, 12, 1.2, 5], [-13, -2, 0.9, 5], [13, 2, -0.9, 5]]) {
+    const track = new THREE.Mesh(new THREE.PlaneGeometry(0.9, len), trackMat);
+    track.rotation.x = -Math.PI / 2;
+    track.rotation.z = ry;
+    track.position.set(tx, 0.02, tz);
+    group.add(track);
+  }
+  for (const [rx, rz, s] of [[-2, 6, 0.32], [3, -6, 0.26], [-9, -2, 0.3], [9, 6, 0.24]]) {
+    const rubble = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.6, s), mats.rust);
+    rubble.position.set(rx, s * 0.3, rz);
+    rubble.rotation.y = rx;
+    rubble.castShadow = true;
+    group.add(rubble);
+  }
+  // Floodlight poles on the yard's long edges: tall steel masts with a warm
+  // lamp head each. Emissive heads only — the existing point lights already
+  // carry the illumination, so no new light cost.
+  const lampHeadMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.5, metalness: 0.4, emissive: new THREE.Color(0xffc46a), emissiveIntensity: 1.4 });
+  for (const [px, pz] of [[-18.8, 0.5], [18.8, -0.5]]) {
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 5.4, 10), mats.steel);
+    mast.position.set(px, 2.7, pz);
+    mast.castShadow = true;
+    group.add(mast);
+    colliders.push(new THREE.Box3(new THREE.Vector3(px - 0.15, 0, pz - 0.15), new THREE.Vector3(px + 0.15, 5.4, pz + 0.15)));
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.34), lampHeadMat);
+    head.position.set(px, 5.5, pz);
+    head.rotation.y = px < 0 ? Math.PI / 2 : -Math.PI / 2;
+    group.add(head);
+  }
   cylinder(0.9, 1.1, 7.5, -16.2, -14.8, 'rust'); // chimney
   cylinder(0.7, 0.9, 6, -9.8, -14.8, 'steel'); // second stack
   box(3.2, 1.1, 1.4, -17.5, 0.55, -10.5, 'crate');
@@ -362,6 +425,28 @@ export function createWorld(scene) {
     win.position.set(wx, 3.9, wz);
     win.rotation.y = ry;
     group.add(win);
+  }
+
+  // ---- Skyline and beacons beyond the walls ----
+  // Dark factory silhouettes on the horizon so the yard sits in a city, not
+  // a void, and two chimney stacks north of the wall with blinking red
+  // aircraft beacons — the only moving lights in the sky.
+  const skylineMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(0x1e1610), roughness: 1 });
+  for (const [sx, sz, sw, sh, sd] of [[-14, -26, 8, 11, 6], [2, -28, 6, 15, 6], [16, -26, 9, 8, 6], [-24, -6, 6, 9, 8], [24, 8, 6, 12, 8], [-22, 12, 6, 7, 6]]) {
+    const block = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), skylineMat);
+    block.position.set(sx, sh / 2 - 0.5, sz);
+    group.add(block);
+  }
+  const beaconMats = [];
+  for (const [cx, cz, ch] of [[-8, -23, 14], [10, -23, 11]]) {
+    const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, ch, 12), mats.rust);
+    stack.position.set(cx, ch / 2 - 0.5, cz);
+    group.add(stack);
+    const beaconMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: new THREE.Color(0xff2a1a), emissiveIntensity: 2 });
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), beaconMat);
+    beacon.position.set(cx, ch - 0.3, cz);
+    group.add(beacon);
+    beaconMats.push(beaconMat);
   }
 
   // ---- Sky, fog and dusk light ----
@@ -467,10 +552,11 @@ export function createWorld(scene) {
     group,
     step(dt) {
       time += dt;
-      // Furnace mouth breathes; site plates bob gently.
+      // Furnace mouth breathes; site plates bob gently; beacons blink.
       furnaceLight.intensity = 30 + Math.sin(time * 2.1) * 4 + Math.sin(time * 5.7) * 2;
       plateA.position.y = 4.6 + Math.sin(time * 0.9) * 0.12;
       plateB.position.y = 4.6 + Math.sin(time * 0.9 + 2) * 0.12;
+      beaconMats.forEach((m, i) => { m.emissiveIntensity = Math.sin(time * 2.2 + i * 2.1) > 0 ? 2.4 : 0.12; });
     },
   };
 }

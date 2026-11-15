@@ -150,6 +150,18 @@ export function createBots(scene, world) {
         sidestepDir: 1,
         kills: 0,
         deaths: 0,
+        // v3 — duel movement state. strafeStuck measures how long a bot has
+        // been strafing without actually moving (its shoulder is on a wall);
+        // pushTimer steps it forward off the wall. peekState drives the
+        // holder's peek rhythm; holdFlip picks its alternate angle after a
+        // kill; smokeReady is its one retake smoke per round.
+        strafeStuck: 0,
+        pushTimer: 0,
+        peekTimer: 1 + Math.random() * 1.5,
+        peekState: 'hold',
+        holdFlip: false,
+        reposition: false,
+        smokeReady: true,
       };
       figure.torso.userData.bot = bot;
       figure.torso.userData.part = 'torso';
@@ -181,6 +193,13 @@ export function createBots(scene, world) {
     bot.staged = false;
     bot.plantedSeen = false;
     bot.stuckTime = 0;
+    bot.strafeStuck = 0;
+    bot.pushTimer = 0;
+    bot.peekTimer = 1 + Math.random() * 1.5;
+    bot.peekState = 'hold';
+    bot.holdFlip = false;
+    bot.reposition = false;
+    bot.smokeReady = true;
   }
 
   function reset(spawns) {
@@ -204,10 +223,25 @@ export function createBots(scene, world) {
     return out.set(p.x, p.y + 1.15, p.z);
   }
 
-  function hasLineOfSight(from, to) {
+  function hasLineOfSight(from, to, ctx) {
     tmpDir.copy(to).sub(from);
     const dist = tmpDir.length();
     if (dist > BOT_RANGE) return false;
+    // Smoke blocks sight both ways: a segment through any live puff (radius
+    // 2.2 m, 12 s) is not a sightline. The player shoots through smoke the
+    // same way — the puff is in their shootables too.
+    if (ctx && ctx.smoke) {
+      for (const puff of ctx.smoke) {
+        if (ctx.time > puff.until) continue;
+        const ax = from.x; const az = from.z;
+        const dx = to.x - ax; const dz = to.z - az;
+        const lenSq = dx * dx + dz * dz;
+        let t = lenSq > 0 ? ((puff.x - ax) * dx + (puff.z - az) * dz) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = ax + dx * t; const cz = az + dz * t;
+        if (Math.hypot(puff.x - cx, puff.z - cz) < puff.r) return false;
+      }
+    }
     tmpDir.normalize();
     raycaster.set(from, tmpDir);
     const hits = raycaster.intersectObjects(world.shootables, false);
@@ -232,7 +266,7 @@ export function createBots(scene, world) {
     for (const cand of candidates) {
       const to = chestPos(cand, losTo);
       const dist = from.distanceTo(to);
-      if (dist < bestDist && dist < BOT_RANGE && hasLineOfSight(from, to)) {
+      if (dist < bestDist && dist < BOT_RANGE && hasLineOfSight(from, to, ctx)) {
         best = cand; bestDist = dist;
       }
     }
@@ -262,8 +296,14 @@ export function createBots(scene, world) {
       bot.staged = true;
     }
     if (bot.role === 'holder') {
-      if (bot.team === 'azure') return bot.lane === 'A' ? { x: -8, z: -6 } : { x: 10, z: 6 };
-      return bot.lane === 'A' ? { x: -6, z: -4 } : { x: 6, z: 4 };
+      // Two angles per holder: after a kill it rotates to the alternate one
+      // instead of sitting the same lane the enemy just died on.
+      if (bot.team === 'azure') {
+        if (bot.lane === 'A') return bot.holdFlip ? { x: -11, z: -3 } : { x: -8, z: -6 };
+        return bot.holdFlip ? { x: 13, z: 3 } : { x: 10, z: 6 };
+      }
+      if (bot.lane === 'A') return bot.holdFlip ? { x: -9, z: -7 } : { x: -6, z: -4 };
+      return bot.holdFlip ? { x: 9, z: 7 } : { x: 6, z: 4 };
     }
     if (bot.role === 'rusher') return { x: 0, z: 8 };
     if (bot.team === 'azure') {
@@ -329,6 +369,13 @@ export function createBots(scene, world) {
   }
 
   function shootAt(bot, ctx, dt) {
+    shootAtPoint(bot, ctx, dt, chestPos(bot.target, new THREE.Vector3()), bot.target.kind, bot.target.ref);
+  }
+
+  // Fire one burst round at an aim point. kind 'player'/'bot' is a tracked
+  // target; kind 'point' is suppressive fire at a last-seen position — it
+  // only lands if the player is still within a step of that spot.
+  function shootAtPoint(bot, ctx, dt, to, kind, ref) {
     if (bot.burstLeft <= 0) {
       bot.pauseTimer -= dt;
       if (bot.pauseTimer > 0) return;
@@ -340,11 +387,10 @@ export function createBots(scene, world) {
     bot.shotTimer = BOT_GAP;
     bot.burstLeft -= 1;
     const from = eyePos(bot, new THREE.Vector3());
-    const to = chestPos(bot.target, new THREE.Vector3());
     const dist = from.distanceTo(to);
     // Aim error grows with distance, target speed and crouching; standing
     // still to aim is safer for the player, exactly as the design says.
-    const targetSpeed = bot.target.kind === 'player' ? ctx.playerSpeed : 2.5;
+    const targetSpeed = kind === 'player' ? ctx.playerSpeed : 2.5;
     const error = bot.aimError + dist * 0.0035 + targetSpeed * 0.004;
     const hitChance = Math.max(0.12, 0.62 - error * 9 - dist * 0.004);
     const muzzle = from.clone();
@@ -357,12 +403,20 @@ export function createBots(scene, world) {
       to.y += (Math.random() - 0.5) * 0.8;
       return;
     }
+    if (kind === 'point') {
+      // Suppression only bites if the player never moved off the spot.
+      if (!ctx.player.alive) return;
+      const pp = ctx.player.body.state.position;
+      if (Math.hypot(pp.x - to.x, pp.z - to.z) > 0.9) return;
+      ctx.damagePlayer(BOT_DAMAGE, bot.name, false, bot.body.state.position);
+      return;
+    }
     const headshot = Math.random() < 0.14;
     const damage = headshot ? BOT_HEAD_DAMAGE : BOT_DAMAGE;
-    if (bot.target.kind === 'player') {
-      ctx.damagePlayer(damage, bot.name, headshot);
+    if (kind === 'player') {
+      ctx.damagePlayer(damage, bot.name, headshot, bot.body.state.position);
     } else {
-      damageBot(bot.target.ref, damage, bot.name, headshot, ctx);
+      damageBot(ref, damage, bot.name, headshot, ctx);
     }
   }
 
@@ -379,6 +433,15 @@ export function createBots(scene, world) {
     bot.fall = 0;
     bot.channel = null;
     ctx.onKill(bot.name, killerName, headshot ? 'Headshot' : 'Longshot-7');
+    // The killer rotates: a holder that just won its angle moves to the
+    // alternate one instead of waiting for the revenge peek.
+    for (const other of bots) {
+      if (other.name === killerName && other.alive) {
+        other.kills += 1;
+        other.reposition = true;
+        other.holdFlip = !other.holdFlip;
+      }
+    }
   }
 
   function stepBot(bot, dt, ctx) {
@@ -464,21 +527,62 @@ export function createBots(scene, world) {
     const retaking = ctx.planted && bot.team === 'azure' && plantedDist > 10;
     const closeRetake = ctx.planted && bot.team === 'azure' && plantedDist <= 4;
 
+    // HAVOC covers the retake with smoke: once per round, on the way in
+    // (6–14 m out), it throws a screen over the site so the defuser is not
+    // shot off the charge in the open.
+    if (ctx.planted && bot.team === 'azure' && bot.name === 'HAVOC' && bot.smokeReady && plantedDist > 6 && plantedDist < 14 && ctx.player.alive) {
+      bot.smokeReady = false;
+      if (ctx.onBotSmoke) ctx.onBotSmoke(bot);
+    }
+
+    // A killer that just rotated drops its route and walks to the new angle.
+    if (bot.reposition) {
+      bot.reposition = false;
+      bot.route = [];
+      bot.routeIndex = 0;
+    }
+
     if (!bot.channel) {
       if (bot.target && now >= bot.reactAt && !retaking && !closeRetake) {
         // Engage: face the target, strafe, fire in bursts.
         const tp = chestPos(bot.target, new THREE.Vector3());
         faceTarget(bot, dt, tp);
-        bot.strafeTimer -= dt;
-        if (bot.strafeTimer <= 0) {
-          bot.strafeTimer = 0.5 + Math.random() * 0.7;
-          bot.strafeDir = Math.random() < 0.5 ? -1 : 1;
-          // Holders drop to a crouch on their angle; rushers stay upright
-          // and keep moving.
-          const crouchChance = bot.role === 'holder' ? 0.45 : bot.role === 'rusher' ? 0.1 : 0.25;
-          if (Math.random() < crouchChance) keys.add('ControlLeft');
+        // Peek rhythm (holders): a holder does not strafe in the open. It
+        // sits crouched on its angle, then steps out for a burst, then tucks
+        // back. Rushers and flankers strafe; holders peek.
+        bot.peekTimer -= dt;
+        if (bot.peekTimer <= 0) {
+          bot.peekTimer = 1.2 + Math.random() * 1.3;
+          if (bot.role === 'holder') bot.peekState = bot.peekState === 'hold' ? 'peek' : 'hold';
         }
-        if (bot.strafeDir > 0) keys.add('KeyD'); else keys.add('KeyA');
+        const peeking = bot.role === 'holder' && bot.peekState === 'peek';
+        if (bot.role === 'holder' && !peeking) {
+          keys.add('ControlLeft'); // tucked on the angle
+        } else {
+          // Strafe, but never into a wall: if the bot has been strafing
+          // without moving for half a second, its shoulder is on a crate or
+          // a container face — flip the strafe and step forward off it.
+          // v2's duelling bots strafed sideways into a wall and held an
+          // angle from there for the rest of the round.
+          if (bot.body.groundSpeed() < 0.8) bot.strafeStuck += dt;
+          else bot.strafeStuck = 0;
+          if (bot.strafeStuck > 0.5) {
+            bot.strafeStuck = 0;
+            bot.strafeDir *= -1;
+            bot.pushTimer = 0.45;
+          }
+          bot.pushTimer -= dt;
+          if (bot.pushTimer > 0) {
+            keys.add('KeyW');
+          } else {
+            bot.strafeTimer -= dt;
+            if (bot.strafeTimer <= 0) {
+              bot.strafeTimer = 0.5 + Math.random() * 0.7;
+              bot.strafeDir = Math.random() < 0.5 ? -1 : 1;
+            }
+            if (bot.strafeDir > 0) keys.add('KeyD'); else keys.add('KeyA');
+          }
+        }
         if (!blinded) shootAt(bot, ctx, dt);
         if (bot.target.kind === 'player' && !ctx.player.alive) bot.target = null;
         if (bot.target && bot.target.kind === 'bot' && !bot.target.ref.alive) bot.target = null;
@@ -491,6 +595,11 @@ export function createBots(scene, world) {
         } else if (bot.target && now < bot.reactAt) {
           const tp = chestPos(bot.target, new THREE.Vector3());
           faceTarget(bot, dt, tp);
+        } else if (!bot.target && bot.role === 'rusher' && bot.lastSeen && now - bot.lastSeenAt < 1.2 && bot.burstLeft > 0) {
+          // Suppressive fire: the rusher keeps hosing the spot the player
+          // was just seen at for a beat after losing sight of them.
+          faceTarget(bot, dt, bot.lastSeen);
+          shootAtPoint(bot, ctx, dt, bot.lastSeen.clone(), 'point', null);
         }
       }
     }

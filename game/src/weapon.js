@@ -10,30 +10,42 @@ export const WEAPONS = {
     damage: 34, headMult: 2.5, mag: 12, reserve: 48, gap: 0.22, auto: false,
     reload: 1.1, spreadStill: 0.0035, spreadMove: 0.02, kick: 0.011, tracer: 0xffd27a,
     blurb: 'Reliable sidearm. Free, always in your holster.',
+    bars: { power: 34, range: 30, rate: 45 },
   },
   raptor: {
     id: 'raptor', name: 'RAPTOR-12', kind: 'SMG', price: 1200,
     damage: 26, headMult: 2.5, mag: 28, reserve: 112, gap: 0.085, auto: true,
     reload: 1.6, spreadStill: 0.006, spreadMove: 0.03, kick: 0.008, tracer: 0xffc46a,
     blurb: 'Fast hose. Shreds up close, drifts at range.',
+    bars: { power: 26, range: 35, rate: 95 },
   },
   longshot: {
     id: 'longshot', name: 'LONGSHOT-7', kind: 'Rifle', price: 2500,
     damage: 38, headMult: 2.5, mag: 30, reserve: 90, gap: 0.105, auto: true,
     reload: 1.9, spreadStill: 0.0022, spreadMove: 0.028, kick: 0.013, tracer: 0xffe9a8,
     blurb: 'The yard rifle. Accurate, steady, honest.',
+    bars: { power: 55, range: 80, rate: 60 },
   },
   deadeye: {
     id: 'deadeye', name: 'DEADEYE-50', kind: 'Sniper', price: 4000,
     damage: 88, headMult: 2.5, mag: 5, reserve: 20, gap: 1.15, auto: false,
     reload: 2.6, spreadStill: 0.0006, spreadMove: 0.05, kick: 0.032, tracer: 0xfff6d8,
     blurb: 'One shot, one lesson. Punishes a moving shooter.',
+    bars: { power: 100, range: 100, rate: 12 },
   },
 };
 
 export const GRENADE = {
   id: 'spark9', name: 'SPARK-9 FLASH', price: 200,
   blurb: 'Blinds anyone facing it within 12 m for a few seconds.',
+};
+
+// Second grenade type: a smoke screen. It hangs in the air for 12 s and
+// blocks bot line of sight (and the player's own shots), so a plant or a
+// retake can be covered instead of rushed.
+export const SMOKE = {
+  id: 'smoke4', name: 'SMOKE-4 SCREEN', price: 300,
+  blurb: 'Thick grey smoke for 12 s. Blocks sight — both ways. Press Q to throw.',
 };
 
 const MOVE_REFERENCE = 5.2;

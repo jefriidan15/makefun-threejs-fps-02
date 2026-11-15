@@ -60,6 +60,35 @@ export function createEffects(scene) {
   }
   let glowCursor = 0;
 
+  // Smoke screen: pooled grey sprites that bloom out and hang for 12 s.
+  // One sprite per puff, six in the pool; the visuals live here, the
+  // line-of-sight block lives in main.js (it owns the smoke list the bots read).
+  const smokeCanvas = document.createElement('canvas');
+  smokeCanvas.width = 128; smokeCanvas.height = 128;
+  {
+    const ctx = smokeCanvas.getContext('2d');
+    for (let i = 0; i < 26; i += 1) {
+      const gx = 20 + Math.random() * 88;
+      const gy = 20 + Math.random() * 88;
+      const gr = 14 + Math.random() * 26;
+      const grad = ctx.createRadialGradient(gx, gy, 1, gx, gy, gr);
+      grad.addColorStop(0, 'rgba(168,164,158,0.85)');
+      grad.addColorStop(1, 'rgba(168,164,158,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(gx, gy, gr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  const smokeTexture = new THREE.CanvasTexture(smokeCanvas);
+  smokeTexture.colorSpace = THREE.SRGBColorSpace;
+  const smokes = [];
+  for (let i = 0; i < 6; i += 1) {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTexture, transparent: true, opacity: 0, depthWrite: false }));
+    sprite.visible = false;
+    scene.add(sprite);
+    smokes.push({ sprite, life: 0 });
+  }
+  let smokeCursor = 0;
+
   const explosionMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1, 20, 14),
     new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0, depthWrite: false }),
@@ -131,6 +160,15 @@ export function createEffects(scene) {
       explosionLight.intensity = 120;
       this.sparksAt(point, null);
     },
+    smokeAt(point) {
+      const slot = smokes[smokeCursor];
+      smokeCursor = (smokeCursor + 1) % smokes.length;
+      slot.sprite.position.set(point.x, 1.1, point.z);
+      slot.sprite.scale.setScalar(1.5);
+      slot.sprite.material.opacity = 0.55;
+      slot.sprite.visible = true;
+      slot.life = 12;
+    },
     showCharge(point) {
       chargeMesh.position.set(point.x, 0.2, point.z);
       chargeMesh.visible = true;
@@ -175,6 +213,18 @@ export function createEffects(scene) {
           g.life -= dt;
           g.sprite.material.opacity = Math.max(0, g.life / 0.25) * 0.9;
           if (g.life <= 0) g.sprite.visible = false;
+        }
+      }
+      // Smoke blooms to full size in the first second, holds, then thins
+      // out over the last three.
+      for (const s of smokes) {
+        if (s.life > 0) {
+          s.life -= dt;
+          const age = 12 - s.life;
+          const scale = Math.min(4.6, 1.5 + age * 3.1);
+          s.sprite.scale.setScalar(scale);
+          s.sprite.material.opacity = s.life < 3 ? 0.55 * (s.life / 3) : 0.55;
+          if (s.life <= 0) s.sprite.visible = false;
         }
       }
       if (chargeMesh.visible) {
