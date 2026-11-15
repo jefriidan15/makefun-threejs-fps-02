@@ -181,12 +181,17 @@ export function createWeapon(camera) {
       state.kick = 0;
     },
     ready() {
-      return state.mag > 0 && state.cooldown === 0 && state.reloadLeft === 0;
+      // Ready means the gun can cycle — not cooling down, not mid-reload.
+      // It deliberately does NOT check the magazine: an empty mag must
+      // still reach fireRound, which auto-reloads instead of dry-clicking.
+      return state.cooldown === 0 && state.reloadLeft === 0;
     },
     pullTrigger() {
       state.cooldown = def.gap;
       state.flash = 0.06;
-      state.kick = 0.055;
+      // The kick is the gun's own: the Deadeye bucks hard, the Raptor
+      // barely moves. The camera pitch kick in main.js scales the same way.
+      state.kick = 0.02 + def.kick * 3;
       flash.rotation.z = Math.random() * Math.PI * 2;
     },
     takeRound() {

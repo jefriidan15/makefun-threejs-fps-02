@@ -30,6 +30,7 @@ export function createHud() {
   const aliveAzure = $('alive-azure');
   const nadeVal = $('nade-val');
   const smokeVal = $('smoke-val');
+  const reloadVal = $('reload-val');
   const historyEl = $('round-history');
   const dmgDir = $('dmg-dir');
   const dmgNum = $('dmg-num');
@@ -56,7 +57,7 @@ export function createHud() {
   let bannerTimer = 0;
   let dmgDirTimer = 0;
   let dmgNumTimer = 0;
-  let last = { mag: -1, reserve: -1, hp: -1, money: -1, timer: -1, se: -1, sa: -1, round: -1, ae: -1, aa: -1, nade: -1, smoke: -1, weapon: '', history: '' };
+  let last = { mag: -1, reserve: -1, hp: -1, money: -1, timer: -1, se: -1, sa: -1, round: -1, ae: -1, aa: -1, nade: -1, smoke: -1, reload: false, weapon: '', history: '' };
   let playHandler = null;
   let buyHandler = null;
 
@@ -155,6 +156,13 @@ export function createHud() {
       last.smoke = n;
       smokeVal.textContent = n > 0 ? `Q · SMOKE-4 ×${n}` : 'Q · no smoke';
     },
+    // Reload state, in words under the ammo: the view model dips, and the
+    // readout says so — a reload is visible in a still frame, not just felt.
+    setReloading(on) {
+      if (on === last.reload) return;
+      last.reload = on;
+      reloadVal.textContent = on ? '⟳ RELOADING…' : '';
+    },
     // Round-history pips: one dot per finished round, orange for a win,
     // blue for a loss, under the score — the match's shape at a glance.
     setHistory(history) {
@@ -173,12 +181,12 @@ export function createHud() {
     },
     // Floating damage number beside the crosshair: the hit's size, so a
     // headshot reads differently from a body shot.
-    damageNumber(amount, headshot) {
+    damageNumber(amount, headshot, holdMs = 650) {
       dmgNum.textContent = headshot ? `${amount} ⌖` : String(amount);
       dmgNum.classList.toggle('head', headshot);
       dmgNum.classList.add('on');
       clearTimeout(dmgNumTimer);
-      dmgNumTimer = setTimeout(() => dmgNum.classList.remove('on'), 650);
+      dmgNumTimer = setTimeout(() => dmgNum.classList.remove('on'), holdMs);
     },
     setCharge(carrying) {
       chargeTag.hidden = !carrying;

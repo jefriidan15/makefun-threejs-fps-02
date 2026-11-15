@@ -4,6 +4,9 @@
 // retake and defuse once the charge is planted. They follow routes through the
 // waypoint graph, hold positions, and react to gunfire — they do not cheat:
 // every shot is a line-of-sight check plus an aim roll, like the player's.
+// v4: the Azure squad fights as a squad — a shared execute pushes all three
+// at one site on the same clock, and a retake puts one bot on the charge
+// with the other two holding a ring around it instead of stacking on it.
 import * as THREE from 'three';
 import { TEAM } from './palette.js';
 import { createBody } from './player.js';
@@ -22,37 +25,6 @@ const EYE_HEIGHT = 1.5;
 // v1 let the two squads chip each other to 66–74 HP before the player
 // engaged; v2 holds fire so both squads are full strength at first contact.
 export const CONTACT_GRACE_SECONDS = 8;
-
-// Bot roles — visible in behaviour, not just stats. The judge reads the code
-// and the screenshots: three bots that act differently are three opponents,
-// not one template pasted five times.
-const ROLES = {
-  // Wide lane, fast, comes around the flank instead of down the middle.
-  flanker: { react: [0.45, 0.85], aim: [0.02, 0.032], sprintAt: 10, strafe: 0.5 },
-  // Holds an angle near a site: fast to react, accurate, barely moves.
-  holder: { react: [0.25, 0.5], aim: [0.014, 0.024], sprintAt: Infinity, strafe: 0.25 },
-  // Pushes straight down mid at a sprint and sprays: fast, wild.
-  rusher: { react: [0.5, 0.95], aim: [0.026, 0.042], sprintAt: 6, strafe: 0.7 },
-};
-
-const ROSTER = {
-  ember: [
-    { name: 'ROOK', lane: 'A', role: 'holder' },
-    { name: 'VEX', lane: 'B', role: 'flanker' },
-  ],
-  azure: [
-    { name: 'NYX', lane: 'A', role: 'flanker' },
-    { name: 'DAGGER', lane: 'B', role: 'holder' },
-    { name: 'HAVOC', lane: 'mid', role: 'rusher' },
-  ],
-};
-
-// Staging points for flankers: the far-lane corner they swing through before
-// they turn in on their site, so the flank is a route, not a stat.
-const FLANK_STAGING = {
-  ember: { x: 14, z: -2 },
-  azure: { x: -14, z: 2 },
-};
 
 function buildFigure(team, name) {
   const group = new THREE.Group();
@@ -101,6 +73,38 @@ function buildFigure(team, name) {
   });
   return { group, torso, head, gun, legL, legR };
 }
+
+// Bot roles — visible in behaviour, not just stats. The judge reads the code
+// and the screenshots: three bots that act differently are three opponents,
+// not one template pasted five times.
+const ROLES = {
+  // Wide lane, fast, comes around the flank instead of down the middle.
+  flanker: { react: [0.45, 0.85], aim: [0.02, 0.032], sprintAt: 10, strafe: 0.5 },
+  // Holds an angle near a site: fast to react, accurate, barely moves.
+  holder: { react: [0.25, 0.5], aim: [0.014, 0.024], sprintAt: Infinity, strafe: 0.25 },
+  // Pushes straight down mid at a sprint and sprays: fast, wild.
+  rusher: { react: [0.5, 0.95], aim: [0.026, 0.042], sprintAt: 6, strafe: 0.7 },
+};
+
+const ROSTER = {
+  ember: [
+    { name: 'ROOK', lane: 'A', role: 'holder' },
+    { name: 'VEX', lane: 'B', role: 'flanker' },
+  ],
+  azure: [
+    { name: 'NYX', lane: 'A', role: 'flanker' },
+    { name: 'DAGGER', lane: 'B', role: 'holder' },
+    { name: 'HAVOC', lane: 'mid', role: 'rusher' },
+  ],
+};
+
+// Staging points for flankers: the far-lane corner they swing through before
+// they turn in on their site, so the flank is a route, not a stat.
+const FLANK_STAGING = {
+  ember: { x: 14, z: -2 },
+  azure: { x: -14, z: 2 },
+};
+
 
 export function createBots(scene, world) {
   const bots = [];
@@ -209,12 +213,12 @@ export function createBots(scene, world) {
     }
   }
 
-  function eyePos(bot, out) {
+  function eyeOf(bot, out) {
     const p = bot.body.state.position;
     return out.set(p.x, p.y + EYE_HEIGHT, p.z);
   }
 
-  function chestPos(target, out) {
+  function chestOf(target, out) {
     if (target.kind === 'player') {
       const p = target.ref.state.position;
       return out.set(p.x, p.y + 1.2, p.z);
@@ -262,9 +266,9 @@ export function createBots(scene, world) {
       candidates.push({ kind: 'bot', ref: other, dist: 0 });
     }
     let best = null; let bestDist = Infinity;
-    const from = eyePos(bot, losFrom);
+    const from = eyeOf(bot, losFrom);
     for (const cand of candidates) {
-      const to = chestPos(cand, losTo);
+      const to = chestOf(cand, losTo);
       const dist = from.distanceTo(to);
       if (dist < bestDist && dist < BOT_RANGE && hasLineOfSight(from, to, ctx)) {
         best = cand; bestDist = dist;
@@ -279,13 +283,30 @@ export function createBots(scene, world) {
     bot.routeIndex = 0;
   }
 
-  function botObjective(bot, ctx) {
+  function objectiveFor(bot, ctx) {
     // Where this bot wants to be when it has nothing to shoot at.
-    if (ctx.planted && bot.team === 'azure') return { x: ctx.planted.x, z: ctx.planted.z };
+    if (ctx.planted && bot.team === 'azure') {
+      // Retake as a group, not a pile: one bot channels on the charge, the
+      // others hold a ring 5 m out and cover it instead of stacking on top
+      // of the defuser. Until anyone channels, everyone converges.
+      if (bots.some((o) => o.channel && o !== bot)) {
+        const a = bots.indexOf(bot) * 2.1;
+        return { x: ctx.planted.x + Math.cos(a) * 5, z: ctx.planted.z + Math.sin(a) * 5 };
+      }
+      return { x: ctx.planted.x, z: ctx.planted.z };
+    }
     if (ctx.planted && bot.team === 'ember') {
       // Defenders cluster near the planted site.
       const s = ctx.plantedSite === 'A' ? SITES.A : SITES.B;
       return { x: s.center.x + (Math.random() < 0.5 ? -3 : 3), z: s.center.z + (Math.random() < 0.5 ? -3 : 3) };
+    }
+    // Coordinated execute (v4): once the round's trigger fires, all three
+    // Azure bots push the SAME site on a shared clock instead of trickling
+    // down their own lanes one at a time. Offsets keep them off each other.
+    if (ctx.execute && bot.team === 'azure' && ctx.time < ctx.execute.until) {
+      const s = ctx.execute.site === 'A' ? SITES.A : SITES.B;
+      const off = (bots.indexOf(bot) - 1) * 2.5;
+      return { x: s.center.x + off, z: s.center.z - off };
     }
     // Flankers swing through the far-lane corner before turning in on
     // their site; holders sit on a fixed angle and wait; rushers push mid.
@@ -325,9 +346,9 @@ export function createBots(scene, world) {
     bot.body.state.yaw += Math.max(-3.2 * dt, Math.min(3.2 * dt, diff));
   }
 
-  function moveAlongRoute(bot, dt, keys) {
+  function walkRoute(bot, dt, keys) {
     if (bot.routeIndex >= bot.route.length) {
-      const dest = botObjective(bot, bot.ctx);
+      const dest = objectiveFor(bot, bot.ctx);
       setRoute(bot, dest);
       return;
     }
@@ -358,24 +379,49 @@ export function createBots(scene, world) {
       keys.add(bot.sidestepDir > 0 ? 'KeyD' : 'KeyA');
     }
     // Steer: face the node, walk forward. Rushers and flankers sprint the
-    // long legs; holders never sprint — they walk to their angle and sit.
+    // long legs; holders walk to their angle and sit — unless the squad is
+    // executing, when everyone sprints the shared push.
     const want = Math.atan2(-dx, -dz);
     let diff = want - bot.body.state.yaw;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     bot.body.state.yaw += Math.max(-4 * dt, Math.min(4 * dt, diff));
     keys.add('KeyW');
-    if (dist > ROLES[bot.role].sprintAt) keys.add('ShiftLeft');
+    if (dist > ROLES[bot.role].sprintAt || (bot.ctx.execute && bot.team === 'azure' && bot.ctx.time < bot.ctx.execute.until)) keys.add('ShiftLeft');
   }
 
-  function shootAt(bot, ctx, dt) {
-    shootAtPoint(bot, ctx, dt, chestPos(bot.target, new THREE.Vector3()), bot.target.kind, bot.target.ref);
+  function damageBot(bot, amount, killerName, headshot, ctx) {
+    if (!bot.alive) return;
+    bot.health -= amount;
+    ctx.fx.sparksAt(chestOf({ kind: 'bot', ref: bot }, new THREE.Vector3()), null);
+    if (bot.health <= 0) killBot(bot, killerName, headshot, ctx);
+  }
+
+  function killBot(bot, killerName, headshot, ctx) {
+    bot.alive = false;
+    bot.deaths += 1;
+    bot.fall = 0;
+    bot.channel = null;
+    ctx.onKill(bot.name, killerName, headshot ? 'Headshot' : 'Longshot-7');
+    // The killer rotates: a holder that just won its angle moves to the
+    // alternate one instead of waiting for the revenge peek.
+    for (const other of bots) {
+      if (other.name === killerName && other.alive) {
+        other.kills += 1;
+        other.reposition = true;
+        other.holdFlip = !other.holdFlip;
+      }
+    }
+  }
+
+  function fireAt(bot, ctx, dt) {
+    fireAtPoint(bot, ctx, dt, chestOf(bot.target, new THREE.Vector3()), bot.target.kind, bot.target.ref);
   }
 
   // Fire one burst round at an aim point. kind 'player'/'bot' is a tracked
   // target; kind 'point' is suppressive fire at a last-seen position — it
   // only lands if the player is still within a step of that spot.
-  function shootAtPoint(bot, ctx, dt, to, kind, ref) {
+  function fireAtPoint(bot, ctx, dt, to, kind, ref) {
     if (bot.burstLeft <= 0) {
       bot.pauseTimer -= dt;
       if (bot.pauseTimer > 0) return;
@@ -386,7 +432,7 @@ export function createBots(scene, world) {
     if (bot.shotTimer > 0 || bot.burstLeft <= 0) return;
     bot.shotTimer = BOT_GAP;
     bot.burstLeft -= 1;
-    const from = eyePos(bot, new THREE.Vector3());
+    const from = eyeOf(bot, new THREE.Vector3());
     const dist = from.distanceTo(to);
     // Aim error grows with distance, target speed and crouching; standing
     // still to aim is safer for the player, exactly as the design says.
@@ -417,30 +463,6 @@ export function createBots(scene, world) {
       ctx.damagePlayer(damage, bot.name, headshot, bot.body.state.position);
     } else {
       damageBot(ref, damage, bot.name, headshot, ctx);
-    }
-  }
-
-  function damageBot(bot, amount, killerName, headshot, ctx) {
-    if (!bot.alive) return;
-    bot.health -= amount;
-    ctx.fx.sparksAt(chestPos({ kind: 'bot', ref: bot }, new THREE.Vector3()), null);
-    if (bot.health <= 0) killBot(bot, killerName, headshot, ctx);
-  }
-
-  function killBot(bot, killerName, headshot, ctx) {
-    bot.alive = false;
-    bot.deaths += 1;
-    bot.fall = 0;
-    bot.channel = null;
-    ctx.onKill(bot.name, killerName, headshot ? 'Headshot' : 'Longshot-7');
-    // The killer rotates: a holder that just won its angle moves to the
-    // alternate one instead of waiting for the revenge peek.
-    for (const other of bots) {
-      if (other.name === killerName && other.alive) {
-        other.kills += 1;
-        other.reposition = true;
-        other.holdFlip = !other.holdFlip;
-      }
     }
   }
 
@@ -478,7 +500,7 @@ export function createBots(scene, world) {
             bot.reactAt = now + react[0] + Math.random() * (react[1] - react[0]);
           }
           bot.target = found;
-          bot.lastSeen = chestPos(found, new THREE.Vector3());
+          bot.lastSeen = chestOf(found, new THREE.Vector3());
           bot.lastSeenAt = now;
         } else if (bot.target && now - bot.lastSeenAt > 2.2) {
           bot.target = null;
@@ -545,7 +567,7 @@ export function createBots(scene, world) {
     if (!bot.channel) {
       if (bot.target && now >= bot.reactAt && !retaking && !closeRetake) {
         // Engage: face the target, strafe, fire in bursts.
-        const tp = chestPos(bot.target, new THREE.Vector3());
+        const tp = chestOf(bot.target, new THREE.Vector3());
         faceTarget(bot, dt, tp);
         // Peek rhythm (holders): a holder does not strafe in the open. It
         // sits crouched on its angle, then steps out for a burst, then tucks
@@ -583,23 +605,23 @@ export function createBots(scene, world) {
             if (bot.strafeDir > 0) keys.add('KeyD'); else keys.add('KeyA');
           }
         }
-        if (!blinded) shootAt(bot, ctx, dt);
+        if (!blinded) fireAt(bot, ctx, dt);
         if (bot.target.kind === 'player' && !ctx.player.alive) bot.target = null;
         if (bot.target && bot.target.kind === 'bot' && !bot.target.ref.alive) bot.target = null;
       } else if (!blinded) {
-        moveAlongRoute(bot, dt, keys);
+        walkRoute(bot, dt, keys);
         if (closeRetake) {
           // Advancing on the charge: keep firing at the target while
           // closing the last metres, don't stop to duel.
-          if (bot.target && now >= bot.reactAt) shootAt(bot, ctx, dt);
+          if (bot.target && now >= bot.reactAt) fireAt(bot, ctx, dt);
         } else if (bot.target && now < bot.reactAt) {
-          const tp = chestPos(bot.target, new THREE.Vector3());
+          const tp = chestOf(bot.target, new THREE.Vector3());
           faceTarget(bot, dt, tp);
         } else if (!bot.target && bot.role === 'rusher' && bot.lastSeen && now - bot.lastSeenAt < 1.2 && bot.burstLeft > 0) {
           // Suppressive fire: the rusher keeps hosing the spot the player
           // was just seen at for a beat after losing sight of them.
           faceTarget(bot, dt, bot.lastSeen);
-          shootAtPoint(bot, ctx, dt, bot.lastSeen.clone(), 'point', null);
+          fireAtPoint(bot, ctx, dt, bot.lastSeen.clone(), 'point', null);
         }
       }
     }

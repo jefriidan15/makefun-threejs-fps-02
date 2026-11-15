@@ -320,6 +320,15 @@ export function createWorld(scene) {
     rubble.castShadow = true;
     group.add(rubble);
   }
+  // Objective beacons: a faint amber light column over each site, so the
+  // objective reads from anywhere in the yard — a player always knows where
+  // the round is decided. Additive, no collision, no light cost.
+  const beamMat = new THREE.MeshBasicMaterial({ color: 0xf0a830, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  for (const site of [SITES.A, SITES.B]) {
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 9, 12, 1, true), beamMat);
+    beam.position.set(site.center.x, 4.5, site.center.z);
+    group.add(beam);
+  }
   // Floodlight poles on the yard's long edges: tall steel masts with a warm
   // lamp head each. Emissive heads only — the existing point lights already
   // carry the illumination, so no new light cost.

@@ -1,9 +1,12 @@
-// MERIDIAN FOUNDRY v3 — boot, the fixed-step loop, and the deterministic
+// MERIDIAN FOUNDRY v4 — boot, the fixed-step loop, and the deterministic
 // screenshot staging. The sim ticks at 60 Hz no matter how fast the display
 // renders; rendering only ever reads sim state, never advances it.
 // ?shot=start|play|plant|end|demo with &seed=N stages one frozen frame (or
 // one unattended demo round) and raises window.__shotReady. window.__game
 // exposes live state so the headless harness can drive and inspect a round.
+// v4: coordinated Azure executes (one site, one clock), retake cover ring,
+// per-weapon recoil, auto-reload on an empty mag, and a cover frame that
+// freezes a kill, a smoke screen and crossing tracers in one shot.
 import * as THREE from 'three';
 import { createWorld, SPAWNS, SITES } from './world.js';
 import { createBody } from './player.js';
@@ -135,6 +138,7 @@ function registerKill(victim, killer, weaponName, headshot = false) {
 function hurtPlayer(amount, fromName, headshot, fromPos) {
   if (!me.alive || match.state.phase !== 'live') return;
   link.contact = true; // first contact: the squads may now engage each other
+  link.engaged = true;
   health -= amount;
   hud.setHealth(health);
   hud.damage();
@@ -170,6 +174,8 @@ const link = {
   planted: null,
   plantedSite: null,
   contact: false,
+  engaged: false, // the player has fired or been hit — the squads are in it now
+  execute: null, // { site, at, until } — the shared Azure push, one site, one clock
   smoke: smokePuffs,
   fx: effects,
   sound: (name) => sfx[name] && sfx[name](),
@@ -188,11 +194,15 @@ const link = {
   },
   onNextRound: () => respawnAll(),
   // A bot's retake smoke: a screen lobbed from its chest toward the planted
-  // site, so the defuser is covered while it channels.
+  // site, so the defuser is covered while it channels. The smoke is also the
+  // push signal — the squad sprints the site together behind it (utility
+  // combo: smoke, then the execute), instead of one bot smoking while the
+  // other two keep holding their old angles.
   onBotSmoke: (bot) => {
     const from = bot.body.state.position;
     const target = link.planted;
     if (!target) return;
+    link.execute = { site: link.plantedSite, at: link.time, until: link.time + 12 };
     const dir = scratch.set(target.x - from.x, 0, target.z - from.z);
     const dist = dir.length() || 1;
     dir.divideScalar(dist);
@@ -202,8 +212,15 @@ const link = {
 
 // ---- Shooting ---------------------------------------------------------------
 function fireRound(spread) {
-  if (!weapon.takeRound()) { sfx.dry(); return false; }
+  // An empty mag reloads itself — a dry click in a firefight is a dead
+  // player, and the R key is for topping up, not for unjamming the gun.
+  if (!weapon.takeRound()) {
+    if (weapon.state.reserve > 0 && weapon.reload()) sfx.reload();
+    else sfx.dry();
+    return false;
+  }
   link.contact = true; // the player's shot is first contact
+  link.engaged = true;
   camera.getWorldDirection(aimDir);
   aimDir.x += (Math.random() * 2 - 1) * spread;
   aimDir.y += (Math.random() * 2 - 1) * spread;
@@ -225,7 +242,7 @@ function fireRound(spread) {
       bots.damageBot(bot, damage, 'Mly', headshot, link);
       if (wasAlive) {
         hud.hitMarker(!bot.alive, shotName ? 4000 : 90);
-        hud.damageNumber(damage, headshot);
+        hud.damageNumber(damage, headshot, shotName ? 10000 : 650);
         if (bot.alive) sfx.hit();
       }
     } else {
@@ -233,7 +250,9 @@ function fireRound(spread) {
     }
   }
   weapon.pullTrigger();
-  rig.recoil(0.009 + Math.random() * 0.004, (Math.random() * 2 - 1) * 0.004);
+  // Recoil is per-weapon, not one flat kick: the Deadeye bucks, the Raptor
+  // barely moves — the pitch kick scales with the gun's own kick number.
+  rig.recoil(weapon.def.kick * 0.7 + Math.random() * 0.004, (Math.random() * 2 - 1) * 0.004);
   hud.setAmmo(weapon.state.mag, weapon.state.reserve);
   return true;
 }
@@ -372,6 +391,8 @@ function respawnAll() {
   hud.setAlive(3, 3);
   hud.setHistory(match.state.history);
   link.contact = false;
+  link.engaged = false;
+  link.execute = null;
   roundElapsed = 0;
   syncCamera();
 }
@@ -427,6 +448,15 @@ function step(dt) {
   roundElapsed += dt;
   if (roundElapsed > CONTACT_GRACE_SECONDS) link.contact = true;
   link.time = elapsed;
+  // Coordinated execute: on first contact with the player — or at 25 s if
+  // the round stays quiet — the Azure squad stops laning and pushes one
+  // site together: the site nearest the player, so the push comes at the
+  // player instead of at an empty corner. One trigger per round.
+  if (!link.execute && match.state.phase === 'live' && me.alive && (link.engaged || roundElapsed > 25)) {
+    const dA = Math.hypot(stance.position.x - SITES.A.center.x, stance.position.z - SITES.A.center.z);
+    const dB = Math.hypot(stance.position.x - SITES.B.center.x, stance.position.z - SITES.B.center.z);
+    link.execute = { site: dA <= dB ? 'A' : 'B', at: elapsed, until: elapsed + 30 };
+  }
   const pressed = input.takePressed();
   const phase = match.state.phase;
 
@@ -507,6 +537,12 @@ function step(dt) {
     sites: { A: SITES.A.center, B: SITES.B.center },
   });
   hud.setHealth(health);
+  // Ammo is pushed every step, not just after a shot: a reload finishes in
+  // weapon.step, and without this the readout would sit stale at the old
+  // magazine until the next round is fired. Cached inside the HUD, so the
+  // DOM only changes when the numbers do.
+  hud.setAmmo(weapon.state.mag, weapon.state.reserve);
+  hud.setReloading(weapon.state.reloadLeft > 0);
   hud.markBuyAffordable(match.state.money, match.state.ownedWeapon);
 }
 
@@ -615,7 +651,10 @@ function runShot(name) {
       const score = [seen.length, -seen[0][0], sx, sz, seen[0][1]];
       if (!bestPair || score[0] > bestPair[0] || (score[0] === bestPair[0] && score[1] > bestPair[1])) {
         bestPair = score;
-        secondBot = seen.length > 1 ? seen[1][1] : null;
+        // The crossing tracer comes from the FARTHEST visible bot, not the
+        // second-nearest: a long lateral beam reads across the whole frame,
+        // while the nearest bot's beam is a short stub behind the camera.
+        secondBot = seen.length > 1 ? seen[seen.length - 1][1] : null;
       }
     }
     if (bestPair) {
@@ -638,9 +677,28 @@ function runShot(name) {
       aimAt(tp);
       fireRound(0);
       settle(8);
+      // Re-aim every round: a duelling bot strafes ~0.7 m in the 8 steps
+      // between shots, and a stale aim point misses a 0.52 m torso outright.
+      tp.set(target.body.state.position.x, 1.2, target.body.state.position.z);
       aimAt(tp);
       fireRound(0);
       settle(2);
+      // Third round finishes the target: the cover freezes a kill — the
+      // falling body, the kill-feed row, the red hitmarker — not a duel
+      // still in progress. Two Longshot body hits leave 24 HP; the third
+      // is the kill, so re-aim at where the bot stands now, not where it
+      // stood two shots ago.
+      tp.set(target.body.state.position.x, 1.2, target.body.state.position.z);
+      aimAt(tp);
+      fireRound(0);
+      settle(24);
+      // A smoke screen staged off the firing lane, bloomed out: grey puff
+      // in frame with the tracers, so the cover shows utility as well as
+      // gunfire. It sits right of the line of fire so it never hides the kill.
+      const midX = (stance.position.x + tp.x) / 2 + Math.cos(stance.yaw) * 2.5;
+      const midZ = (stance.position.z + tp.z) / 2 - Math.sin(stance.yaw) * 2.5;
+      laySmoke(new THREE.Vector3(midX, 0, midZ));
+      settle(30);
       // Freeze a second bot's tracer in the frame: a streak from its muzzle
       // toward the player, stopping 2.5 m short and offset a step to the
       // player's screen-right, so the beam crosses the frame laterally
@@ -655,6 +713,11 @@ function runShot(name) {
         effects.tracer(from, to, 0x7aa8ff);
         effects.sparksAt(scratch.set(target.body.state.position.x, 1.2, target.body.state.position.z), null);
       }
+      // Re-light the muzzle flash for the frozen frame: the flash only lives
+      // 0.06 s, and the smoke-bloom settle after the last shot let it die.
+      // pullTrigger only re-arms the flash/kick visuals — no round is fired.
+      weapon.pullTrigger();
+      settle(1);
     }
     hud.setScore(1, 0, 2);
   } else if (name === 'plant') {
@@ -712,6 +775,24 @@ function runShot(name) {
     syncCamera();
     match.state.plantProgress = 0.62;
     hud.plant(0.62, 'PLANTING THE CHARGE — FURNACE…');
+    // A retaking Azure bot's tracer across the site: the plant frame shows
+    // the threat arriving, not an empty room with a progress bar. Pick a bot
+    // inside the view cone so the beam actually crosses the frame.
+    const fx = -Math.sin(stance.yaw);
+    const fz = -Math.cos(stance.yaw);
+    for (const bot of bots.bots) {
+      if (bot.team !== 'azure' || !bot.alive) continue;
+      const dx = bot.body.state.position.x - stance.position.x;
+      const dz = bot.body.state.position.z - stance.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 3 || d > 15 || (dx * fx + dz * fz) / d < 0.643) continue;
+      const from = new THREE.Vector3(bot.body.state.position.x, bot.body.state.position.y + 1.4, bot.body.state.position.z);
+      const to = scratch2.copy(stance.position).add(new THREE.Vector3(0, 1.3, 0));
+      to.x += Math.cos(stance.yaw) * 1.2;
+      to.z -= Math.sin(stance.yaw) * 1.2;
+      effects.tracer(from, to, 0x7aa8ff);
+      break;
+    }
     hud.setScore(2, 1, 4);
   } else if (name === 'demo') {
     // Attract/demo mode: plays one round unattended through the real code —
@@ -807,7 +888,7 @@ window.__game = {
   get phase() { return match.state.phase; },
   get frames() { return frameCount; },
   get steps() { return stepCount; },
-  version: 'meridian-foundry-3.0',
+  version: 'meridian-foundry-4.0',
 };
 
 syncCamera();
